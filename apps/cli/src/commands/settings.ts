@@ -19,10 +19,19 @@ import { BbHttpError } from "@bb/sdk";
 import { action } from "../action.js";
 import { createCliBbSdk } from "../client.js";
 import { outputJson } from "./helpers.js";
+import {
+  parseSettingsSearchLimit,
+  searchSettingsCatalog,
+  SETTINGS_SEARCH_DEFAULT_LIMIT,
+} from "./settings-search.js";
 import { resolveMachineHostId, resolveMachineTargetOption } from "./machine.js";
 
 interface JsonOptions {
   json?: boolean;
+}
+
+interface SettingsSearchOptions extends JsonOptions {
+  limit?: string;
 }
 
 interface UsageOptions extends JsonOptions {
@@ -286,6 +295,34 @@ export function registerSettingsCommands(
         ).system.uiPreferences.reset({ key });
         if (outputJson(opts, result)) return;
         console.log(`${key} reset`);
+      }),
+    );
+
+  settings
+    .command("search <query>")
+    .description("Find a setting by name, keyword, or section")
+    .option("--json", "Print machine-readable JSON output")
+    .option(
+      "--limit <count>",
+      "Maximum number of results",
+      String(SETTINGS_SEARCH_DEFAULT_LIMIT),
+    )
+    .action(
+      action(async (query: string, opts: SettingsSearchOptions) => {
+        const results = searchSettingsCatalog(
+          query,
+          opts.limit === undefined
+            ? SETTINGS_SEARCH_DEFAULT_LIMIT
+            : parseSettingsSearchLimit(opts.limit),
+        );
+        if (outputJson(opts, results)) return;
+        if (results.length === 0) {
+          console.log(`No setting matches ${query}`);
+          return;
+        }
+        for (const result of results) {
+          console.log(`${result.label} — Settings → ${result.section}`);
+        }
       }),
     );
 

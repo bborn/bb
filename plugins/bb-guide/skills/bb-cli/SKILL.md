@@ -83,6 +83,8 @@ BB_HOST_DAEMON_PORT only for an intentional non-default target.
   it also prints that machine's availability (`available`, `setup-required`,
   `unavailable`, or `unknown` until the background probe answers). Read or set `managedBranchPrefix`
   through `bb settings show` and `bb settings general <key> <value>`.
+- Locate a setting you cannot name with `bb settings search <query>`; it matches
+  synonyms and section names offline and reports the owning Settings page.
 - The server keeps a registry of sidebar layout preferences (organization
   mode, section order, collapsed rows, navigation entries): `bb settings ui
 list`, `get`, `set`, and `reset`.

@@ -115,6 +115,7 @@ branches bb creates after the change.
 
   bb settings show
   bb settings ai-services
+  bb settings search <query> [--limit <count>]
   bb settings general <key> <value>
   bb settings experiment <key> <value>
   bb settings usage [--machine <id-or-name>]

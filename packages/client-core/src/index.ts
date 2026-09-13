@@ -10,6 +10,7 @@ export * from "./sidebar/projectThreadGroups.js";
 export * from "./sidebar/machineThreadGroups.js";
 export * from "./sidebar/pinnedSidebarThreads.js";
 export * from "./sidebar/threadReadState.js";
+export * from "./settings/settings-catalog.js";
 export * from "./sidebar/sidebarSectionId.js";
 export * from "./sidebar/sidebarSectionOrder.js";
 export * from "./sidebar/neighbor-reorder.js";

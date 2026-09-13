@@ -3,6 +3,17 @@
 Server-backed preferences in Settings. They are persisted on the server, so
 every window and client sees the same value.
 
+## Finding a setting
+
+- `bb settings search <query> [--limit <count>] [--json]` finds a setting by
+  its name, by a synonym, or by its section, and prints the owning Settings
+  page for each match. It reads a static catalog, so it needs no server.
+- The same catalog backs the search field in the app's Settings sidebar, so
+  both surfaces match the same synonyms: `dark mode` finds Theme, and
+  `worktree` finds New branch prefix.
+- `--json` prints each match with its `id`, `label`, `section`, `sectionId`,
+  and `keywords`.
+
 ## Setting values
 
 - `bb settings general <key> <value>` accepts any key listed under
