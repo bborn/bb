@@ -592,6 +592,7 @@ export function KeyboardSettingsSection() {
         <SettingsWithControl
           description="Show shortcut badges after holding Command or Control."
           label="Show keyboard hints when holding CMD / Control"
+          settingId="show-keyboard-hints"
         >
           <Switch
             aria-label="Show keyboard hints when holding CMD / Control"

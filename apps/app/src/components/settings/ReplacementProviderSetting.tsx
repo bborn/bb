@@ -29,6 +29,7 @@ export function ReplacementProviderSetting({
   triggerAriaLabel,
   builtInDescription,
   preferenceAtom,
+  settingId,
   slots,
 }: {
   label: string;
@@ -36,6 +37,7 @@ export function ReplacementProviderSetting({
   triggerAriaLabel: string;
   builtInDescription: string;
   preferenceAtom: WritableAtom<string, [string], void>;
+  settingId?: string;
   slots: readonly ReplacementProviderSlot[];
 }) {
   const [preference, setPreference] = useAtom(preferenceAtom);
@@ -64,7 +66,11 @@ export function ReplacementProviderSetting({
     options.find((option) => option.key === preference) ?? builtInOption;
 
   return (
-    <SettingsWithControl label={label} description={description}>
+    <SettingsWithControl
+      label={label}
+      description={description}
+      settingId={settingId}
+    >
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button

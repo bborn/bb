@@ -3,6 +3,9 @@ import { matchPath, useLocation } from "react-router-dom";
 import { useHostDaemon, useLocalHostDaemonAccess } from "@/hooks/useHostDaemon";
 import { usePluginSlots, type PluginFileOpenerSlot } from "@/lib/plugin-slots";
 import { usePluginList } from "@/hooks/queries/plugin-settings-queries";
+import { useHosts } from "@/hooks/queries/host-queries";
+import { useSidebarNavigation } from "@/hooks/queries/sidebar-navigation-query";
+import type { SettingsSearchNamedEntity } from "./settings-search";
 import {
   SETTINGS_MACHINE_ROUTE_PATH,
   SETTINGS_PLUGIN_ROUTE_PATH,
@@ -25,6 +28,8 @@ export interface SettingsNavState {
   hasUnknownSection: boolean;
   activePluginId: string | null;
   pluginEntries: readonly PluginSettingsEntry[];
+  searchHosts: readonly SettingsSearchNamedEntity[];
+  searchProjects: readonly SettingsSearchNamedEntity[];
   sections: readonly SettingsNavSection[];
 }
 
@@ -52,6 +57,8 @@ export function useSettingsNavState(): SettingsNavState {
   const { fileOpeners, settingsSections } = usePluginSlots();
   const sections = useSettingsNavSections(fileOpeners);
   const pluginListQuery = usePluginList({ enabled: true });
+  const hostsQuery = useHosts();
+  const sidebarNavigationQuery = useSidebarNavigation();
 
   const sectionMatch = matchPath(
     SETTINGS_SECTION_ROUTE_PATH,
@@ -100,6 +107,8 @@ export function useSettingsNavState(): SettingsNavState {
     activeSection,
     hasUnknownSection,
     pluginEntries,
+    searchHosts: hostsQuery.data ?? [],
+    searchProjects: sidebarNavigationQuery.data?.projects ?? [],
     sections,
   };
 }

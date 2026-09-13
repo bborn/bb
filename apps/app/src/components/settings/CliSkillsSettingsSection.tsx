@@ -62,6 +62,7 @@ export function CliSkillsSettingsSectionContent({
         label={CLI_SKILLS_SETTING_LABEL}
         {...(statusBadge === null ? {} : { labelBadge: statusBadge })}
         description={installDescription(hasConnectedMachine)}
+        settingId="bb-cli-skills"
       >
         <Button
           type="button"

@@ -81,6 +81,9 @@ import {
 import { useSystemConfig } from "@/hooks/queries/system-queries";
 import { useWorkspaceOpenTargets } from "@/hooks/useWorkspaceOpenTargets";
 import { isDesktopBrowserAvailable } from "@/lib/bb-desktop";
+import { SETTING_LABEL } from "@/components/settings/settings-search-catalog";
+import { SettingsHighlightContext } from "@/components/settings/settings-highlight-context";
+import { useSettingHighlight } from "@/hooks/useSettingHighlight";
 import {
   FAVICON_COLOR_VALUES,
   getFaviconGlyphHref,
@@ -123,6 +126,7 @@ interface LocalOpenTargetPreferenceDefinition {
   capability: WorkspaceOpenTargetCapability;
   emptyDescription: string;
   label: string;
+  settingId: string;
 }
 
 interface LocalOpenTargetPreferenceControlProps {
@@ -311,6 +315,7 @@ function FaviconColorSettingsControl({
     <SettingsWithControl
       label="Favicon color"
       description="Tint browser tabs to tell instances apart."
+      settingId="favicon-color"
     >
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -363,13 +368,15 @@ function FaviconColorSettingsControl({
 const DIRECTORY_TARGET_PREFERENCE: LocalOpenTargetPreferenceDefinition = {
   capability: "openDirectory",
   emptyDescription: "No local app can open directories.",
-  label: "Directory default",
+  label: SETTING_LABEL["directory-default"],
+  settingId: "directory-default",
 };
 
 const FILE_TARGET_PREFERENCE: LocalOpenTargetPreferenceDefinition = {
   capability: "openFile",
   emptyDescription: "No local app can open files.",
-  label: "File default",
+  label: SETTING_LABEL["file-default"],
+  settingId: "file-default",
 };
 
 function LocalOpenTargetPreferenceControl({
@@ -407,7 +414,10 @@ function LocalOpenTargetPreferenceControl({
       : "Unavailable");
 
   return (
-    <SettingsWithControl label={definition.label}>
+    <SettingsWithControl
+      label={definition.label}
+      settingId={definition.settingId}
+    >
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -516,6 +526,7 @@ export function LocalOpenTargetSettingsSection({
       <SettingsSection title="File Preferences">
         <SettingsWithControl
           label="Local editor integration"
+          settingId="local-editor-integration"
           description={
             <>
               {descriptionText}{" "}
@@ -573,13 +584,18 @@ export function LocalOpenTargetSettingsSection({
   );
 }
 
-const IN_APP_BROWSER_LINK_SETTING_LABEL = "Open links in the in-app browser";
-const REWRITE_LOCALHOST_LINKS_SETTING_LABEL = "Rewrite localhost links";
+const IN_APP_BROWSER_LINK_SETTING_LABEL =
+  SETTING_LABEL["open-links-in-app-browser"];
+const REWRITE_LOCALHOST_LINKS_SETTING_LABEL =
+  SETTING_LABEL["rewrite-localhost-links"];
 const NAVIGATE_TO_THREAD_AFTER_CREATE_SETTING_LABEL =
-  "Navigate to threads on creation";
-const RICH_TEXT_EDITING_SETTING_LABEL = "Markdown formatting in prompt box";
-const DIAGNOSTIC_EVENTS_SETTING_LABEL = "Show diagnostic events";
-const FOLLOW_UP_BEHAVIOR_SETTING_LABEL = "Default thread followup behavior";
+  SETTING_LABEL["navigate-to-threads-on-creation"];
+const RICH_TEXT_EDITING_SETTING_LABEL =
+  SETTING_LABEL["markdown-formatting-in-prompt-box"];
+const DIAGNOSTIC_EVENTS_SETTING_LABEL =
+  SETTING_LABEL["show-diagnostic-events"];
+const FOLLOW_UP_BEHAVIOR_SETTING_LABEL =
+  SETTING_LABEL["default-thread-followup-behavior"];
 const FOLLOW_UP_BEHAVIOR_OPTIONS = [
   {
     steerOnEnter: false,
@@ -594,8 +610,8 @@ const FOLLOW_UP_BEHAVIOR_OPTIONS = [
       "Enter steers the run now. Command+Enter (Ctrl+Enter on Windows and Linux) adds a follow-up for later.",
   },
 ] as const;
-const STREAMER_MODE_SETTING_LABEL = "Streamer mode";
-const MANAGED_BRANCH_PREFIX_SETTING_LABEL = "New branch prefix";
+const STREAMER_MODE_SETTING_LABEL = SETTING_LABEL["streamer-mode"];
+const MANAGED_BRANCH_PREFIX_SETTING_LABEL = SETTING_LABEL["new-branch-prefix"];
 const MANAGED_BRANCH_PREFIX_EXAMPLE_SLUG = "fix-login-flow-thr_ab12cd34ef";
 
 interface ManagedBranchPrefixSettingProps {
@@ -640,6 +656,7 @@ function ManagedBranchPrefixSetting({
         )
       }
       controlPlacement="below"
+      settingId="new-branch-prefix"
     >
       <Input
         value={draft}
@@ -697,7 +714,7 @@ export function AppearanceSettingsSection({
         <SidebarThreadListSetting />
         <SidebarNavigationSetting />
         <CodeRendererSettings />
-        <SettingsWithControl label="Theme">
+        <SettingsWithControl label="Theme" settingId="theme">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -740,6 +757,7 @@ export function AppearanceSettingsSection({
         <SettingsWithControl
           label="Palette"
           description={PALETTE_SETTING_DESCRIPTION}
+          settingId="palette"
         >
           <DropdownMenu
             onOpenChange={(open) => {
@@ -856,6 +874,7 @@ export function GeneralSettingsSection({
       <div className="space-y-5">
         <SettingsWithControl
           label={NAVIGATE_TO_THREAD_AFTER_CREATE_SETTING_LABEL}
+          settingId="navigate-to-threads-on-creation"
         >
           <Switch
             checked={navigateToThreadAfterCreate}
@@ -864,7 +883,10 @@ export function GeneralSettingsSection({
           />
         </SettingsWithControl>
 
-        <SettingsWithControl label={RICH_TEXT_EDITING_SETTING_LABEL}>
+        <SettingsWithControl
+          label={RICH_TEXT_EDITING_SETTING_LABEL}
+          settingId="markdown-formatting-in-prompt-box"
+        >
           <Switch
             checked={richTextEditing}
             onCheckedChange={onRichTextEditingChange}
@@ -875,6 +897,7 @@ export function GeneralSettingsSection({
         <SettingsWithControl
           label={FOLLOW_UP_BEHAVIOR_SETTING_LABEL}
           description="What Enter does in the prompt box while the thread runs."
+          settingId="default-thread-followup-behavior"
         >
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -929,6 +952,7 @@ export function GeneralSettingsSection({
           <SettingsWithControl
             label={IN_APP_BROWSER_LINK_SETTING_LABEL}
             description="Open web links inside bb."
+            settingId="open-links-in-app-browser"
           >
             <Switch
               checked={openLinksInAppBrowser}
@@ -941,6 +965,7 @@ export function GeneralSettingsSection({
         <SettingsWithControl
           label={REWRITE_LOCALHOST_LINKS_SETTING_LABEL}
           description="Point localhost links at this host."
+          settingId="rewrite-localhost-links"
         >
           <Switch
             checked={rewriteLocalhostLinks}
@@ -958,6 +983,7 @@ export function GeneralSettingsSection({
         <SettingsWithControl
           label={STREAMER_MODE_SETTING_LABEL}
           description="Hide the custom models from config.json in every model picker, so a screen share does not show them."
+          settingId="streamer-mode"
         >
           <Switch
             checked={streamerMode}
@@ -981,6 +1007,7 @@ export function DebugSettingsSection({
       <SettingsWithControl
         label={DIAGNOSTIC_EVENTS_SETTING_LABEL}
         description="Show provider environment resolution and unhandled provider events for troubleshooting."
+        settingId="show-diagnostic-events"
       >
         <Switch
           checked={enabled}
@@ -995,27 +1022,31 @@ export function DebugSettingsSection({
 
 const EXPERIMENT_DEFINITIONS: Record<
   ExperimentKey,
-  { label: string; description: string }
+  { label: string; description: string; settingId: string }
 > = {
   changelogPreview: {
-    label: "Changelog preview",
+    label: SETTING_LABEL["experiment-changelog-preview"],
     description:
       "Show the latest release notes as a compact preview on the Updates page.",
+    settingId: "experiment-changelog-preview",
   },
   mobileApp: {
-    label: "Mobile app",
+    label: SETTING_LABEL["experiment-mobile-app"],
     description:
       "Pair the bb mobile app over bb connect: shows Add mobile device under Remote access and enables bb connect machine-code.",
+    settingId: "experiment-mobile-app",
   },
   sidebarProgressiveDisclosure: {
-    label: "Sidebar progressive disclosure",
+    label: SETTING_LABEL["experiment-sidebar-progressive-disclosure"],
     description:
       "In By project and By machine, show the first five groups in the current sort order, keep attention groups visible, and reveal ten more per click. Manually is unchanged.",
+    settingId: "experiment-sidebar-progressive-disclosure",
   },
   timelineWindowing: {
-    label: "Timeline windowing",
+    label: SETTING_LABEL["experiment-timeline-windowing"],
     description:
       "Mount only nearby rows in long timelines and expanded timeline details.",
+    settingId: "experiment-timeline-windowing",
   },
 };
 
@@ -1037,6 +1068,7 @@ export function ExperimentsSettingsSection({
               key={experimentKey}
               label={definition.label}
               description={definition.description}
+              settingId={definition.settingId}
             >
               <Switch
                 checked={experiments[experimentKey]}
@@ -1056,6 +1088,7 @@ export function ExperimentsSettingsSection({
 
 export function SettingsView() {
   const navigate = useNavigate();
+  const highlightedSettingId = useSettingHighlight();
   const themePreference = useThemePreference();
   const systemConfigQuery = useSystemConfig();
   const { hasDaemon } = useHostDaemon();
@@ -1291,8 +1324,10 @@ export function SettingsView() {
   }
 
   return (
-    <PageShell contentClassName="pt-4 md:pt-5">
-      <div className="mx-auto w-full max-w-3xl space-y-10">{content}</div>
-    </PageShell>
+    <SettingsHighlightContext.Provider value={highlightedSettingId}>
+      <PageShell contentClassName="pt-4 md:pt-5">
+        <div className="mx-auto w-full max-w-3xl space-y-10">{content}</div>
+      </PageShell>
+    </SettingsHighlightContext.Provider>
   );
 }

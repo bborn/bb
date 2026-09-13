@@ -31,6 +31,7 @@ export function SidebarFooterSettings() {
       label="Sidebar footer"
       description="Drag to reorder. Hidden actions remain available in the footer’s More menu."
       controlPlacement="below"
+      settingId="sidebar-footer"
     >
       <div
         className="rounded-md border border-border"

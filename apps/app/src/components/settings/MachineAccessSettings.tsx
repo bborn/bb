@@ -281,6 +281,7 @@ function MachineAccessDetails({
       {selected === "direct" && (
         <SettingsWithControl
           label="Server address"
+          settingId="machine-access"
           description={
             error === null ? (
               "Use your own domain or an address on a shared network. Every machine you add must be able to reach this address; localhost won’t work."

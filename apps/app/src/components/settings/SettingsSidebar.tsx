@@ -1,4 +1,7 @@
-import { type MouseEvent as ReactMouseEvent } from "react";
+import { useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useNavigate } from "react-router-dom";
+import { Input } from "@bb/shared-ui/input";
+import { cn } from "@bb/shared-ui/lib/utils";
 import { PluginIcon } from "@/components/plugin/PluginIcon";
 import {
   SectionSidebar,
@@ -7,11 +10,17 @@ import {
   SectionSidebarActionRow,
   SectionSidebarRow,
 } from "@/components/sidebar/SectionSidebar";
+import { useCloseMobileSidebar } from "@/components/ui/sidebar.js";
 import { canOpenNativeScreen, shellOpenNative } from "@/lib/native-shell";
 import { getPluginConfigurationRoutePath } from "@/lib/route-paths";
 import { useSettingsNavState } from "./settings-nav";
 import type { SettingsNavState } from "./settings-nav";
 import { getSettingsSectionRoutePath } from "./settings-sections";
+import { useSettingsSearchResults } from "./settings-search";
+import type {
+  SettingsSearchNamedEntity,
+  SettingsSearchResult,
+} from "./settings-search";
 
 interface SettingsSidebarProps {
   onResizeMouseDown: (event: ReactMouseEvent<HTMLDivElement>) => void;
@@ -23,11 +32,117 @@ interface SettingsSidebarProps {
 type SettingsSidebarNavigation = Pick<
   SettingsNavState,
   "activePluginId" | "activeSection" | "pluginEntries" | "sections"
->;
+> &
+  Partial<Pick<SettingsNavState, "searchHosts" | "searchProjects">>;
 
 interface SettingsSidebarContentProps extends SettingsSidebarProps {
   navigation: SettingsSidebarNavigation;
   testIdPrefix?: string;
+}
+
+const EMPTY_ENTITIES: readonly SettingsSearchNamedEntity[] = [];
+
+interface LabelSegment {
+  text: string;
+  emphasized: boolean;
+}
+
+export function labelSegments(
+  label: string,
+  positions: readonly number[],
+): LabelSegment[] {
+  const emphasized = new Set(positions);
+  const segments: LabelSegment[] = [];
+  for (const [index, character] of [...label].entries()) {
+    const isEmphasized = emphasized.has(index);
+    const previous = segments.at(-1);
+    if (previous !== undefined && previous.emphasized === isEmphasized) {
+      previous.text += character;
+      continue;
+    }
+    segments.push({ text: character, emphasized: isEmphasized });
+  }
+  return segments;
+}
+
+function HighlightedLabel({
+  label,
+  positions,
+}: {
+  label: string;
+  positions: readonly number[];
+}) {
+  return (
+    <span className="min-w-0 truncate">
+      {labelSegments(label, positions).map((segment, index) => (
+        <span
+          key={`${index}-${segment.text}`}
+          className={segment.emphasized ? "text-foreground underline" : ""}
+        >
+          {segment.text}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function SettingsSearchResults({
+  activeIndex,
+  results,
+  testIdPrefix,
+}: {
+  activeIndex: number;
+  results: readonly SettingsSearchResult[];
+  testIdPrefix: string;
+}) {
+  const closeOnMobile = useCloseMobileSidebar();
+  const navigate = useNavigate();
+
+  if (results.length === 0) {
+    return (
+      <p
+        className="px-2 py-3 text-xs text-subtle-foreground"
+        data-testid={`${testIdPrefix}-search-empty`}
+      >
+        No settings match.
+      </p>
+    );
+  }
+
+  return (
+    <div
+      className="mt-1 space-y-0.5"
+      data-testid={`${testIdPrefix}-search-results`}
+      role="listbox"
+    >
+      {results.map((result, index) => (
+        <button
+          key={result.candidate.id}
+          type="button"
+          role="option"
+          aria-label={result.candidate.label}
+          aria-selected={index === activeIndex}
+          data-active={index === activeIndex ? "true" : undefined}
+          className={cn(
+            "flex w-full min-w-0 flex-col items-start gap-0 rounded-md px-2 py-1.5 text-left",
+            index === activeIndex && "bg-sidebar-accent",
+          )}
+          onClick={() => {
+            closeOnMobile();
+            navigate(result.candidate.to);
+          }}
+        >
+          <HighlightedLabel
+            label={result.candidate.label}
+            positions={result.positions}
+          />
+          <span className="text-2xs text-subtle-foreground">
+            {result.candidate.sectionLabel}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
 }
 
 export function SettingsSidebarContent({
@@ -40,6 +155,21 @@ export function SettingsSidebarContent({
 }: SettingsSidebarContentProps) {
   const { activePluginId, activeSection, pluginEntries, sections } = navigation;
   const hasPlugins = pluginEntries.length > 0;
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const navigate = useNavigate();
+  const closeOnMobile = useCloseMobileSidebar();
+  const results = useSettingsSearchResults({
+    hosts: navigation.searchHosts ?? EMPTY_ENTITIES,
+    projects: navigation.searchProjects ?? EMPTY_ENTITIES,
+    query,
+    sections,
+  });
+  const searching = query.trim() !== "";
+  const boundedActiveIndex = useMemo(
+    () => (activeIndex < results.length ? activeIndex : 0),
+    [activeIndex, results.length],
+  );
 
   return (
     <SectionSidebar
@@ -50,68 +180,62 @@ export function SettingsSidebarContent({
       onResizeMouseDown={onResizeMouseDown}
       testIdPrefix={testIdPrefix}
     >
-      <SectionSidebarLabel>Settings</SectionSidebarLabel>
-      <div className="mt-1 space-y-0.5">
-        {sections
-          .filter((section) => section.id !== "archived")
-          .map((section) => (
-            <SectionSidebarRow
-              key={section.id}
-              active={activeSection === section.id}
-              label={section.label}
-              to={getSettingsSectionRoutePath(section.id)}
-            >
-              <SectionSidebarIcon name={section.icon} />
-            </SectionSidebarRow>
-          ))}
+      <div className="px-2 pb-1">
+        <Input
+          aria-label="Search settings"
+          placeholder="Search settings"
+          value={query}
+          data-testid={`${testIdPrefix}-search-input`}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setActiveIndex(0);
+          }}
+          onKeyDown={(event) => {
+            if (!searching) return;
+            if (event.key === "Escape") {
+              event.preventDefault();
+              setQuery("");
+              setActiveIndex(0);
+              return;
+            }
+            if (event.key === "ArrowDown") {
+              event.preventDefault();
+              setActiveIndex((current) =>
+                results.length === 0 ? 0 : (current + 1) % results.length,
+              );
+              return;
+            }
+            if (event.key === "ArrowUp") {
+              event.preventDefault();
+              setActiveIndex((current) =>
+                results.length === 0
+                  ? 0
+                  : (current - 1 + results.length) % results.length,
+              );
+              return;
+            }
+            if (event.key === "Enter") {
+              event.preventDefault();
+              const selected = results[boundedActiveIndex];
+              if (selected === undefined) return;
+              closeOnMobile();
+              navigate(selected.candidate.to);
+            }
+          }}
+        />
       </div>
-      {hasPlugins ? (
+      {searching ? (
+        <SettingsSearchResults
+          activeIndex={boundedActiveIndex}
+          results={results}
+          testIdPrefix={testIdPrefix}
+        />
+      ) : (
         <>
-          <div className="mt-4">
-            <SectionSidebarLabel>Plugins</SectionSidebarLabel>
-          </div>
-          <div className="mt-1 space-y-0.5">
-            {pluginEntries.map((entry) => (
-              <SectionSidebarRow
-                key={entry.id}
-                active={activePluginId === entry.id}
-                label={entry.label}
-                to={getPluginConfigurationRoutePath({ pluginId: entry.id })}
-              >
-                <PluginIcon
-                  pluginId={entry.id}
-                  icon={entry.icon}
-                  className="size-4 shrink-0"
-                />
-              </SectionSidebarRow>
-            ))}
-          </div>
-        </>
-      ) : null}
-      {canOpenNativeScreen() ? (
-        <>
-          <div className="mt-4">
-            <SectionSidebarLabel>This phone</SectionSidebarLabel>
-          </div>
-          <div className="mt-1 space-y-0.5">
-            <SectionSidebarActionRow
-              label="This device"
-              testId="settings-nav-native-device"
-              onClick={() => shellOpenNative("device-settings")}
-            >
-              <SectionSidebarIcon name="Smartphone" />
-            </SectionSidebarActionRow>
-          </div>
-        </>
-      ) : null}
-      {sections.some((section) => section.id === "archived") ? (
-        <>
-          <div className="mt-4">
-            <SectionSidebarLabel>Archived</SectionSidebarLabel>
-          </div>
+          <SectionSidebarLabel>Settings</SectionSidebarLabel>
           <div className="mt-1 space-y-0.5">
             {sections
-              .filter((section) => section.id === "archived")
+              .filter((section) => section.id !== "archived")
               .map((section) => (
                 <SectionSidebarRow
                   key={section.id}
@@ -123,8 +247,68 @@ export function SettingsSidebarContent({
                 </SectionSidebarRow>
               ))}
           </div>
+          {hasPlugins ? (
+            <>
+              <div className="mt-4">
+                <SectionSidebarLabel>Plugins</SectionSidebarLabel>
+              </div>
+              <div className="mt-1 space-y-0.5">
+                {pluginEntries.map((entry) => (
+                  <SectionSidebarRow
+                    key={entry.id}
+                    active={activePluginId === entry.id}
+                    label={entry.label}
+                    to={getPluginConfigurationRoutePath({ pluginId: entry.id })}
+                  >
+                    <PluginIcon
+                      pluginId={entry.id}
+                      icon={entry.icon}
+                      className="size-4 shrink-0"
+                    />
+                  </SectionSidebarRow>
+                ))}
+              </div>
+            </>
+          ) : null}
+          {canOpenNativeScreen() ? (
+            <>
+              <div className="mt-4">
+                <SectionSidebarLabel>This phone</SectionSidebarLabel>
+              </div>
+              <div className="mt-1 space-y-0.5">
+                <SectionSidebarActionRow
+                  label="This device"
+                  testId="settings-nav-native-device"
+                  onClick={() => shellOpenNative("device-settings")}
+                >
+                  <SectionSidebarIcon name="Smartphone" />
+                </SectionSidebarActionRow>
+              </div>
+            </>
+          ) : null}
+          {sections.some((section) => section.id === "archived") ? (
+            <>
+              <div className="mt-4">
+                <SectionSidebarLabel>Archived</SectionSidebarLabel>
+              </div>
+              <div className="mt-1 space-y-0.5">
+                {sections
+                  .filter((section) => section.id === "archived")
+                  .map((section) => (
+                    <SectionSidebarRow
+                      key={section.id}
+                      active={activeSection === section.id}
+                      label={section.label}
+                      to={getSettingsSectionRoutePath(section.id)}
+                    >
+                      <SectionSidebarIcon name={section.icon} />
+                    </SectionSidebarRow>
+                  ))}
+              </div>
+            </>
+          ) : null}
         </>
-      ) : null}
+      )}
     </SectionSidebar>
   );
 }

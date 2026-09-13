@@ -17,6 +17,7 @@ interface CommunityLinkRowProps {
   iconClassName?: string;
   label: string;
   openLabel: string;
+  settingId: string;
 }
 
 function CommunityLinkRow({
@@ -26,9 +27,14 @@ function CommunityLinkRow({
   iconClassName,
   label,
   openLabel,
+  settingId,
 }: CommunityLinkRowProps) {
   return (
-    <SettingsWithControl label={label} description={description}>
+    <SettingsWithControl
+      label={label}
+      description={description}
+      settingId={settingId}
+    >
       <Button
         type="button"
         variant="outline"
@@ -59,6 +65,7 @@ export function CommunitySettingsSection() {
       <div className="space-y-5">
         <CommunityLinkRow
           label="Discord"
+          settingId="community-discord"
           description="Join the server for support, feedback, and announcements."
           href={DISCORD_INVITE_URL}
           icon="DiscordLogo"
@@ -67,6 +74,7 @@ export function CommunitySettingsSection() {
         />
         <CommunityLinkRow
           label="GitHub"
+          settingId="community-github"
           description="Source code, issues, and releases for the bb project."
           href={GITHUB_REPO_URL}
           icon="GithubLogo"

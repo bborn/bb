@@ -1,5 +1,6 @@
 import { forwardRef, type HTMLAttributes, type ReactNode } from "react";
 import { cn } from "@bb/shared-ui/lib/utils";
+import { useHighlightedSettingId } from "@/components/settings/settings-highlight-context";
 
 interface SettingsSectionProps {
   action?: ReactNode;
@@ -115,6 +116,7 @@ interface SettingsWithControlProps {
   labelBadge?: string;
   description?: ReactNode;
   controlPlacement?: SettingsControlPlacement;
+  settingId?: string;
   children: ReactNode;
 }
 
@@ -131,16 +133,25 @@ export function SettingsWithControl({
   labelBadge,
   description,
   controlPlacement = "inline",
+  settingId,
   children,
 }: SettingsWithControlProps) {
   const inline = controlPlacement === "inline";
+  const highlightedSettingId = useHighlightedSettingId();
+  const highlighted =
+    settingId !== undefined && settingId === highlightedSettingId;
   return (
     <div
       data-control-placement={controlPlacement}
+      data-setting-id={settingId}
+      data-setting-label={label}
+      data-setting-highlighted={highlighted ? "true" : undefined}
       className={cn(
         "flex flex-col gap-2.5",
         inline && "sm:flex-row sm:justify-between sm:gap-5",
         inline && (description ? "sm:items-start" : "sm:items-center"),
+        highlighted &&
+          "-mx-2 rounded-md px-2 py-1 ring-2 ring-ring transition-shadow",
       )}
     >
       <div className="min-w-0 flex-1">
