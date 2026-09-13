@@ -1,5 +1,13 @@
-import { useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { useNavigate } from "react-router-dom";
+import { Button } from "@bb/shared-ui/button";
+import { Icon } from "@bb/shared-ui/icon";
 import { Input } from "@bb/shared-ui/input";
 import { cn } from "@bb/shared-ui/lib/utils";
 import { PluginIcon } from "@/components/plugin/PluginIcon";
@@ -157,6 +165,8 @@ export function SettingsSidebarContent({
   const hasPlugins = pluginEntries.length > 0;
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
+  const [expanded, setExpanded] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const closeOnMobile = useCloseMobileSidebar();
   const results = useSettingsSearchResults({
@@ -171,6 +181,18 @@ export function SettingsSidebarContent({
     [activeIndex, results.length],
   );
 
+  useEffect(() => {
+    if (expanded) {
+      searchInputRef.current?.focus();
+    }
+  }, [expanded]);
+
+  const collapseSearch = () => {
+    setExpanded(false);
+    setQuery("");
+    setActiveIndex(0);
+  };
+
   return (
     <SectionSidebar
       backLabel="Back to app"
@@ -180,50 +202,72 @@ export function SettingsSidebarContent({
       onResizeMouseDown={onResizeMouseDown}
       testIdPrefix={testIdPrefix}
     >
-      <div className="px-2 pb-1">
-        <Input
-          aria-label="Search settings"
-          placeholder="Search settings"
-          value={query}
-          data-testid={`${testIdPrefix}-search-input`}
-          onChange={(event) => {
-            setQuery(event.target.value);
-            setActiveIndex(0);
-          }}
-          onKeyDown={(event) => {
-            if (!searching) return;
-            if (event.key === "Escape") {
-              event.preventDefault();
-              setQuery("");
+      {expanded ? (
+        <div className="px-2 pb-1">
+          <Input
+            ref={searchInputRef}
+            aria-label="Search settings"
+            placeholder="Search settings"
+            value={query}
+            data-testid={`${testIdPrefix}-search-input`}
+            onBlur={() => {
+              if (query.trim() === "") {
+                setExpanded(false);
+              }
+            }}
+            onChange={(event) => {
+              setQuery(event.target.value);
               setActiveIndex(0);
-              return;
-            }
-            if (event.key === "ArrowDown") {
-              event.preventDefault();
-              setActiveIndex((current) =>
-                results.length === 0 ? 0 : (current + 1) % results.length,
-              );
-              return;
-            }
-            if (event.key === "ArrowUp") {
-              event.preventDefault();
-              setActiveIndex((current) =>
-                results.length === 0
-                  ? 0
-                  : (current - 1 + results.length) % results.length,
-              );
-              return;
-            }
-            if (event.key === "Enter") {
-              event.preventDefault();
-              const selected = results[boundedActiveIndex];
-              if (selected === undefined) return;
-              closeOnMobile();
-              navigate(selected.candidate.to);
-            }
-          }}
-        />
-      </div>
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                collapseSearch();
+                return;
+              }
+              if (!searching) return;
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setActiveIndex((current) =>
+                  results.length === 0 ? 0 : (current + 1) % results.length,
+                );
+                return;
+              }
+              if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setActiveIndex((current) =>
+                  results.length === 0
+                    ? 0
+                    : (current - 1 + results.length) % results.length,
+                );
+                return;
+              }
+              if (event.key === "Enter") {
+                event.preventDefault();
+                const selected = results[boundedActiveIndex];
+                if (selected === undefined) return;
+                closeOnMobile();
+                navigate(selected.candidate.to);
+              }
+            }}
+          />
+        </div>
+      ) : (
+        <div className="flex items-center justify-between gap-1 pr-1">
+          <SectionSidebarLabel>Settings</SectionSidebarLabel>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-6 shrink-0 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
+            aria-label="Search settings"
+            data-testid={`${testIdPrefix}-search-toggle`}
+            onClick={() => setExpanded(true)}
+          >
+            <Icon name="Search" aria-hidden />
+          </Button>
+        </div>
+      )}
       {searching ? (
         <SettingsSearchResults
           activeIndex={boundedActiveIndex}
@@ -232,7 +276,6 @@ export function SettingsSidebarContent({
         />
       ) : (
         <>
-          <SectionSidebarLabel>Settings</SectionSidebarLabel>
           <div className="mt-1 space-y-0.5">
             {sections
               .filter((section) => section.id !== "archived")

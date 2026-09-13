@@ -56,21 +56,70 @@ function renderSidebar() {
   );
 }
 
+function openSearch(): HTMLElement {
+  fireEvent.click(screen.getByTestId("settings-search-toggle"));
+  return screen.getByLabelText("Search settings");
+}
+
 function searchFor(query: string): HTMLElement {
-  const input = screen.getByLabelText("Search settings");
+  const input =
+    screen.queryByTestId("settings-search-input") ?? openSearch();
   fireEvent.change(input, { target: { value: query } });
   return input;
 }
 
 afterEach(cleanup);
 
-describe("settings sidebar search", () => {
-  it("shows the section list until a query is typed", () => {
+describe("settings sidebar search disclosure", () => {
+  it("starts collapsed, showing the section list and a search icon", () => {
     renderSidebar();
+    expect(screen.getByTestId("settings-search-toggle")).toBeTruthy();
+    expect(screen.queryByTestId("settings-search-input")).toBeNull();
     expect(screen.getByRole("link", { name: "Appearance" })).toBeTruthy();
-    expect(screen.queryByTestId("settings-search-results")).toBeNull();
   });
 
+  it("expands into a focused input when the icon is clicked", () => {
+    renderSidebar();
+    const input = openSearch();
+
+    expect(screen.queryByTestId("settings-search-toggle")).toBeNull();
+    expect(document.activeElement).toBe(input);
+    expect(screen.getByRole("link", { name: "Appearance" })).toBeTruthy();
+  });
+
+  it("collapses back to the icon on Escape", () => {
+    renderSidebar();
+    const input = searchFor("theme");
+    expect(screen.getByTestId("settings-search-results")).toBeTruthy();
+
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(screen.getByTestId("settings-search-toggle")).toBeTruthy();
+    expect(screen.queryByTestId("settings-search-input")).toBeNull();
+    expect(screen.queryByTestId("settings-search-results")).toBeNull();
+    expect(screen.getByRole("link", { name: "Appearance" })).toBeTruthy();
+  });
+
+  it("collapses on blur when the query is empty", () => {
+    renderSidebar();
+    const input = openSearch();
+
+    fireEvent.blur(input);
+
+    expect(screen.getByTestId("settings-search-toggle")).toBeTruthy();
+  });
+
+  it("stays open on blur while a query is present", () => {
+    renderSidebar();
+    const input = searchFor("theme");
+
+    fireEvent.blur(input);
+
+    expect(screen.getByTestId("settings-search-input")).toBeTruthy();
+  });
+});
+
+describe("settings sidebar search results", () => {
   it("replaces the section list with ranked settings results", () => {
     renderSidebar();
     searchFor("dark mode");
@@ -125,16 +174,6 @@ describe("settings sidebar search", () => {
     expect(screen.getByTestId("location").textContent).toBe(
       "/settings/machines/host_1",
     );
-  });
-
-  it("restores the section list when the query is cleared with Escape", () => {
-    renderSidebar();
-    const input = searchFor("theme");
-    expect(screen.getByTestId("settings-search-results")).toBeTruthy();
-
-    fireEvent.keyDown(input, { key: "Escape" });
-    expect(screen.queryByTestId("settings-search-results")).toBeNull();
-    expect(screen.getByRole("link", { name: "Appearance" })).toBeTruthy();
   });
 
   it("reports when nothing matches", () => {
