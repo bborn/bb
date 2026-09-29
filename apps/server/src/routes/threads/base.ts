@@ -69,6 +69,7 @@ import { handleThreadOwnershipChange } from "../../services/threads/thread-owner
 import { applyThreadExecutionOverride } from "../../services/threads/thread-execution-override.js";
 import { applyThreadSessionOptionPatch } from "../../services/threads/thread-session-options.js";
 import { emitPluginThreadDeleted } from "../../services/plugins/plugin-thread-events.js";
+import { withThreadRefMatches } from "../../services/threads/thread-ref-search.js";
 
 function parseThreadIncludes(query: ThreadGetQuery): Set<ThreadIncludeOption> {
   const includes = new Set<ThreadIncludeOption>();
@@ -337,7 +338,7 @@ export function registerThreadBaseRoutes(app: Hono, deps: AppDeps): void {
     );
   });
 
-  get(routes.search, (context, query) => {
+  get(routes.search, async (context, query) => {
     const searchQuery = query.query.trim();
     if (countNonWhitespaceChars(searchQuery) < 2) {
       throw new ApiError(
@@ -349,10 +350,14 @@ export function registerThreadBaseRoutes(app: Hono, deps: AppDeps): void {
     const limitPerGroup = parseSearchLimitPerGroup(query.limitPerGroup);
     return context.json(
       buildThreadSearchResponse(deps, {
-        ...searchThreadsWithPendingInteractionState(deps.db, {
+        ...(await withThreadRefMatches(deps, {
           query: searchQuery,
           limitPerGroup,
-        }),
+          results: searchThreadsWithPendingInteractionState(deps.db, {
+            query: searchQuery,
+            limitPerGroup,
+          }),
+        })),
       }) satisfies ThreadSearchResponse,
     );
   });
