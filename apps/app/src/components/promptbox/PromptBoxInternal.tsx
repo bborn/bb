@@ -91,6 +91,7 @@ import {
 import { cn } from "@bb/shared-ui/lib/utils";
 import { PROMPT_STACK_EDGE_CARET_BUTTON_WIDTH_CLASS } from "./banner/PromptStackCard";
 import { AttachmentPreview } from "./AttachmentPreview";
+import { useForkHoldToTalk } from "./fork-hold-to-talk";
 import { VoiceRecordingBar } from "./VoiceRecordingBar";
 import {
   ComposerPlusMenuSlot,
@@ -2758,6 +2759,18 @@ export function PromptBoxInternal({
     }
   }, [canPrimarySubmit, onSubmit]);
 
+  const forkHoldToTalk = useForkHoldToTalk({
+    voice,
+    isPointerCoarse,
+    canStartVoiceInput,
+    canSubmit,
+    startVoiceInput,
+    cancelVoiceInput,
+    submitPrompt,
+    onFallbackPointerDown: handleVoicePointerDown,
+    onFallbackClick: handleVoiceClick,
+  });
+
   const handleSubmitClick = useCallback(
     (event: ReactMouseEvent<HTMLButtonElement>) => {
       blurAfterPointerSubmitRef.current =
@@ -3314,6 +3327,7 @@ export function PromptBoxInternal({
                 showCompactLayout && "absolute inset-y-0 right-2 gap-0 p-0",
               )}
             >
+              {forkHoldToTalk.overlay}
               {voice && isVoiceActionPresent ? (
                 <div
                   data-promptbox-voice-controls=""
@@ -3398,8 +3412,7 @@ export function PromptBoxInternal({
                               : "Start voice input"
                           }
                           disabled={!canStartVoiceInput}
-                          onPointerDown={handleVoicePointerDown}
-                          onClick={handleVoiceClick}
+                          {...forkHoldToTalk.micButtonProps}
                           className={
                             showCompactLayout
                               ? COMPACT_PROMPT_ACTION_BUTTON_CLASS
@@ -3442,8 +3455,7 @@ export function PromptBoxInternal({
                         size={showCompactLayout ? "icon" : "sm"}
                         variant="default"
                         aria-label="Start voice input"
-                        onPointerDown={handleVoicePointerDown}
-                        onClick={handleVoiceClick}
+                        {...forkHoldToTalk.micButtonProps}
                         className={cn(
                           showCompactLayout
                             ? COMPACT_PROMPT_ACTION_BUTTON_CLASS
