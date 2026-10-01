@@ -1,5 +1,6 @@
 import {
   createThread,
+  InvalidLifecycleOwnerError,
   getThreadSectionById,
   getProjectSourceByHost,
   getProject,
@@ -90,6 +91,7 @@ export function createThreadRecord(
   deps: Pick<AppDeps, "db"> & { hub: DbNotifier },
   args: {
     environmentId: string | null;
+    startupContext?: string;
     request: ThreadCreateServiceRequest;
   },
 ) {
@@ -108,6 +110,7 @@ export function createThreadRecord(
       sectionId,
       parentThreadId: args.request.parentThreadId ?? null,
       sourceThreadId: args.request.sourceThreadId ?? null,
+      lifecycleOwnerThreadId: args.request.lifecycleOwnerThreadId,
       originKind: args.request.originKind,
       originPluginId: args.request.originPluginId ?? null,
       pluginMetadata: args.request.pluginMetadata,
@@ -118,10 +121,14 @@ export function createThreadRecord(
       // thread to `starting`. A caller that could pass `starting` here would
       // be claiming a thread had been admitted before anything decided so.
       status: "pending",
+      startupContext: args.startupContext,
     });
     emitPluginThreadCreated(thread);
     return thread;
   } catch (error) {
+    if (error instanceof InvalidLifecycleOwnerError) {
+      throw new ApiError(400, "invalid_request", error.message);
+    }
     if (
       sectionId !== null &&
       error instanceof Error &&

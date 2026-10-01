@@ -33,12 +33,14 @@ import {
 } from "./thread-list-cache-data";
 import {
   allHostQueryKeyPrefix,
+  allMachineEnvironmentQueryKeyPrefix,
   allPluginCatalogSearchQueryKeyPrefix,
   allPluginContributionsQueryKeyPrefix,
   allPluginListQueryKeyPrefix,
   allPluginSettingsQueryKeyPrefix,
   allPluginSettingsViewQueryKeyPrefix,
   allPluginSourceQueryKeyPrefix,
+  pluginSafeModeQueryKey,
   allProjectCommandsQueryKeyPrefix,
   allThreadStorageFilePreviewQueryKeyPrefix,
   allThreadStorageFilesQueryKeyPrefix,
@@ -53,7 +55,10 @@ import {
   environmentPullRequestQueryKey,
   environmentWorkStatusQueryKeyPrefix,
   hostsQueryKey,
+  serverMoveStatusQueryKey,
+  systemAppUpdateQueryKey,
   sidebarNavigationQueryKey,
+  systemAiServicesQueryKey,
   systemConfigQueryKey,
   uiPreferencesQueryKey,
   allSystemProvidersQueryKeyPrefix,
@@ -524,6 +529,7 @@ export const REALTIME_SYSTEM_CHANGE_REGISTRY = {
   "config-changed": {
     dirty: [
       dirtySystemConfigQueries,
+      dirtyMachineEnvironmentQueries,
       dirtyAllThreadTimelineQueries,
       dirtySystemProviderQueries,
       dirtySystemExecutionOptionQueries,
@@ -548,6 +554,12 @@ export const REALTIME_SYSTEM_CHANGE_REGISTRY = {
   },
   "ui-preferences-changed": {
     dirty: [dirtyUiPreferencesQueries],
+  },
+  "server-move-changed": {
+    dirty: [dirtyServerMoveStatusQueries],
+  },
+  "app-update-changed": {
+    dirty: [dirtyAppUpdateStatusQueries],
   },
 } satisfies SystemChangeRegistry;
 
@@ -1143,7 +1155,20 @@ function dirtyHostAvailabilityQueries(): QueryKey[] {
 function dirtySystemConfigQueries({ queryClient }: RealtimeDirtyContext): void {
   invalidateQueryKeysWithoutCancelingActiveFetches({
     queryClient,
-    queryKeys: [systemConfigQueryKey(), allSystemThemesQueryKeyPrefix()],
+    queryKeys: [
+      systemConfigQueryKey(),
+      systemAiServicesQueryKey(),
+      allSystemThemesQueryKeyPrefix(),
+    ],
+  });
+}
+
+function dirtyMachineEnvironmentQueries({
+  queryClient,
+}: RealtimeDirtyContext): void {
+  invalidateQueryKeysWithoutCancelingActiveFetches({
+    queryClient,
+    queryKeys: [allMachineEnvironmentQueryKeyPrefix()],
   });
 }
 
@@ -1154,6 +1179,14 @@ function dirtyUiPreferencesQueries({
     queryClient,
     queryKeys: [uiPreferencesQueryKey()],
   });
+}
+
+function dirtyServerMoveStatusQueries(): QueryKey[] {
+  return [serverMoveStatusQueryKey()];
+}
+
+function dirtyAppUpdateStatusQueries(): QueryKey[] {
+  return [systemAppUpdateQueryKey()];
 }
 
 function dirtyAllThreadTimelineQueries(): QueryKey[] {
@@ -1191,6 +1224,7 @@ function dirtyPluginManagementQueries(): QueryKey[] {
     allPluginSettingsQueryKeyPrefix(),
     allPluginSourceQueryKeyPrefix(),
     allPluginCatalogSearchQueryKeyPrefix(),
+    pluginSafeModeQueryKey(),
   ];
 }
 

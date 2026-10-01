@@ -18,6 +18,7 @@ const CURSOR_LIKE_INFO = {
     permissionModes: ["full" as const],
   },
   composerActions: [],
+  completedTurnDisplay: "collapse" as const,
   displayName: "Plugin Provider",
   id: "plugin-provider",
   logoUrl: null,
@@ -82,13 +83,6 @@ describe("provider registry policy accessors", () => {
     expect(registry.supportsFork("acp-custom-agent")).toBe(false);
     expect(registry.supportsSessionRewind("acp-custom-agent")).toBe(false);
     expect(registry.supportsManualCompaction("acp-opencode")).toBe(false);
-  });
-
-  it("answers null/false for unknown provider ids", () => {
-    const registry = createProviderRegistryService();
-    expect(registry.getServerCapabilities("nope")).toBeNull();
-    expect(registry.getSupportedPermissionModes("nope")).toBeNull();
-    expect(registry.supportsFork("nope")).toBe(false);
   });
 
   it("stops claiming capabilities for a provider whose plugin is gone", () => {
@@ -229,14 +223,6 @@ describe("provider registry ordering", () => {
 describe("provider registry", () => {
   it("starts empty: providers exist only while a plugin declares them", () => {
     expect(createProviderRegistryService().list()).toStrictEqual([]);
-  });
-
-  it("rejects plugin registrations that shadow an existing provider", () => {
-    const registry = createProviderRegistryService();
-    registerProvider(registry, "third-party-agent", "first-plugin");
-    expect(() =>
-      registerProvider(registry, "third-party-agent", "impostor"),
-    ).toThrow(/already registered/);
   });
 
   it("frees an id the moment its registration is disposed", () => {

@@ -1,9 +1,10 @@
 import { hostProviderCliInstallEventSchema } from "@bb/server-contract";
-import type { Host } from "@bb/domain";
+import type { Host, HostType } from "@bb/domain";
 import type {
   CreateHostJoinCodeResponse,
   CreateMachineRequest,
   HostEnrollmentCommandResponse,
+  HostReconnectResponse,
   HostCloneDefaultPathQuery,
   HostCloneDefaultPathResponse,
   HostDirectoryListing,
@@ -17,6 +18,7 @@ import type {
   HostProviderCliInstallRequest,
   HostProviderCliStatusResponse,
   HostRetryUpdateResponse,
+  DeleteOldServerCopyResponse,
   UpdateHostRequest,
   SystemMachineProvider,
 } from "@bb/server-contract";
@@ -41,6 +43,10 @@ export interface HostRetryUpdateArgs {
 
 export interface HostActionArgs {
   hostId: string;
+}
+
+export interface HostReconnectArgs extends HostActionArgs {
+  signal?: AbortSignal;
 }
 
 export interface HostDirectoryArgs extends HostDirectoryQuery {
@@ -69,6 +75,7 @@ export interface HostProviderCliInstallArgs extends HostProviderCliInstallReques
 
 export interface HostListArgs {
   includeCreating?: boolean;
+  type?: HostType;
   signal?: AbortSignal;
 }
 
@@ -86,6 +93,7 @@ export type HostDeleteResult = { ok: true };
 export type HostDirectoryResult = HostDirectoryListing;
 export type HostGetResult = Host & { connectMachineId: string | null };
 export type HostEnrollmentCommandResult = HostEnrollmentCommandResponse;
+export type HostReconnectResult = HostReconnectResponse;
 export type HostCloneDefaultPathResult = HostCloneDefaultPathResponse;
 export type HostProviderCliInstallResult = HostProviderCliInstallEvent[];
 export type HostListResult = Host[];
@@ -102,8 +110,13 @@ export interface HostsArea {
   experimental_getEnrollmentCommand(
     args: HostGetArgs,
   ): Promise<HostEnrollmentCommandResult>;
+  experimental_reconnect(args: HostReconnectArgs): Promise<HostReconnectResult>;
+  /** @deprecated Use experimental_create() and experimental_getEnrollmentCommand() for bootstrap enrollment. */
   createJoinCode(): Promise<HostCreateJoinCodeResult>;
   delete(args: HostDeleteArgs): Promise<HostDeleteResult>;
+  experimental_deleteOldServerCopy(
+    args: HostActionArgs,
+  ): Promise<DeleteOldServerCopyResponse>;
   directory(args: HostDirectoryArgs): Promise<HostDirectoryResult>;
   get(args: HostGetArgs): Promise<HostGetResult>;
   cloneDefaultPath(
@@ -123,6 +136,7 @@ export interface HostsArea {
   experimental_retryCleanup(args: HostActionArgs): Promise<HostActionResult>;
   retryUpdate(args: HostRetryUpdateArgs): Promise<HostRetryUpdateResult>;
   experimental_suspend(args: HostActionArgs): Promise<Host>;
+  experimental_reconcile(args: HostActionArgs): Promise<Host>;
   update(args: HostUpdateArgs): Promise<HostUpdateResult>;
 }
 
@@ -167,6 +181,14 @@ export function createHostsArea(args: CreateSdkAreaArgs): HostsArea {
         ),
       );
     },
+    async experimental_reconnect(input) {
+      return transport.readJson(
+        transport.api.v1.hosts[":id"]["reconnect-commands"].$post(
+          { param: { id: input.hostId } },
+          ...signalRequestArgs(input.signal),
+        ),
+      );
+    },
     async createJoinCode() {
       return transport.readJson(
         transport.api.v1.hosts["join-codes"].$post({
@@ -181,6 +203,13 @@ export function createHostsArea(args: CreateSdkAreaArgs): HostsArea {
         }),
       );
       return { ok: true };
+    },
+    async experimental_deleteOldServerCopy(input) {
+      return transport.readJson(
+        transport.api.v1.hosts[":id"]["old-server-copy"].$delete({
+          param: { id: input.hostId },
+        }),
+      );
     },
     async directory(input) {
       return transport.readJson(
@@ -242,6 +271,7 @@ export function createHostsArea(args: CreateSdkAreaArgs): HostsArea {
                 : {
                     includeCreating: input.includeCreating ? "true" : "false",
                   }),
+              ...(input?.type === undefined ? {} : { type: input.type }),
             },
           },
           ...signalRequestArgs(input?.signal),
@@ -306,6 +336,13 @@ export function createHostsArea(args: CreateSdkAreaArgs): HostsArea {
     async retryUpdate(input) {
       return transport.readJson(
         transport.api.v1.hosts[":id"]["retry-update"].$post({
+          param: { id: input.hostId },
+        }),
+      );
+    },
+    async experimental_reconcile(input) {
+      return transport.readJson(
+        transport.api.v1.hosts[":id"].reconcile.$post({
           param: { id: input.hostId },
         }),
       );

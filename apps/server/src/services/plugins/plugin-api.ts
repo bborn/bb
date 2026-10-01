@@ -2,10 +2,13 @@ import {
   environmentCompositionSchema,
   validateServerAccessProviderDeclaration,
   type NormalizedPluginEnvironmentComposition,
+  type NormalizedPluginInteractionRequest,
 } from "@get-bb/plugin-sdk/internal/host-policy";
 import { createMachineBootstrapApi } from "../machines/bootstrap.js";
 import type { MachineEnrollments } from "../machines/enrollments.js";
 import { listServerAccessProviders } from "./plugin-server-access-registry.js";
+import { detachActivePluginToolCallForUserInput } from "./plugin-tool-calls.js";
+import { fillPluginPresentation } from "./plugin-presentation.js";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import Database from "better-sqlite3";
@@ -18,13 +21,13 @@ import {
   setPluginKvValue,
   type DbConnection,
 } from "@bb/db";
-import type { JsonValue } from "@bb/domain";
+import type { ThreadEventItemPresentation } from "@bb/domain";
 import type {
   BbPluginApi,
   PluginAgentConfiguration,
   PluginAgentConfigurationContext,
   PluginAgentToolContext,
-  PluginAgentToolPresentation,
+  PluginRowPresentation,
   PluginBbSdk,
   PluginAgentToolResult,
   PluginAgents,
@@ -45,10 +48,10 @@ import type {
   PluginKvStorage,
   PluginLogger,
   PluginMentionItem,
+  PluginMentionProviderRegistration,
   PluginMentionSearchContext,
   PluginMentionTrigger,
   PluginMachines,
-  PluginAiServiceDeclaration,
   PluginAiServices,
   PluginProviderDeclaration,
   ExperimentalPluginProviderEnvContext,
@@ -82,6 +85,7 @@ import {
   normalizeMentionProviderRegistration,
   normalizeRealtimePayload,
   normalizeRpcRegistration,
+  publishRpcMethod,
   normalizeWebSocketRouteRegistration,
   pluginCliCollisionWarning,
   registerSettingDescriptors,
@@ -103,7 +107,7 @@ import {
   validatePluginProviderDeclaration,
 } from "@get-bb/plugin-sdk/internal/host-policy";
 import type {
-  AiServiceHostBinding,
+  NormalizedPluginAiService,
   NormalizedPluginEnvironmentProvider,
   NormalizedPluginMachineProvider,
   NormalizedPluginProviderDeclaration,
@@ -120,7 +124,6 @@ import { requestServerAccessRecheck } from "./plugin-server-access-registry.js";
 import type { ServerLogger } from "../../types.js";
 import type { PluginInteractionResult } from "../interactions/pending-interactions.js";
 import { appendPluginLogLine } from "./plugin-log.js";
-import type { PluginHostArtifactSnapshot } from "./plugin-service-internal.js";
 import {
   readPluginSettingsValues,
   writePluginSettingsUpdate,
@@ -182,6 +185,7 @@ export interface PluginWebSocketRouteRecord {
 }
 
 export interface PluginRpcHandler {
+  publication: ReturnType<typeof publishRpcMethod>;
   inputSchema: StandardSchemaV1;
   outputSchema: StandardSchemaV1;
   handler: (input: unknown) => unknown;
@@ -190,7 +194,7 @@ export interface PluginRpcHandler {
 export interface PluginAgentToolRecord {
   name: string;
   description: string;
-  presentation: PluginAgentToolPresentation | null;
+  presentation: PluginRowPresentation | null;
   instructions: string | null;
   inputSchema: unknown;
   parse(
@@ -209,9 +213,7 @@ interface PluginMentionProviderRecord {
   search: (
     ctx: PluginMentionSearchContext,
   ) => PluginMentionItem[] | Promise<PluginMentionItem[]>;
-  resolve: (
-    itemId: string,
-  ) => { context: string } | Promise<{ context: string }>;
+  resolve: PluginMentionProviderRegistration["resolve"];
 }
 
 export interface PluginBackgroundServiceRecord {
@@ -229,6 +231,7 @@ interface PluginCliRegistrationRecord {
   name: string;
   summary: string;
   commands: PluginCliCommandInfo[];
+  rendersHelp: boolean;
   run: (
     argv: string[],
     ctx: PluginCliContext,
@@ -243,6 +246,8 @@ type PluginSettingsListener = (
 export interface PluginApiHandle {
   api: BbPluginApi;
   disposeHooks: Array<() => void | Promise<void>>;
+  /** Handlers recorded by `bb.onInstall`; run once after a fresh install. */
+  installHandlers: Array<() => void | Promise<void>>;
   settings: {
     descriptors: PluginSettingDescriptors;
     listeners: PluginSettingsListener[];
@@ -371,7 +376,7 @@ function createStagedRegistrations<
 >(options: {
   validate: (declaration: TDeclaration) => TNormalized;
   bind: (id: string) => TBinding;
-  isTaken: (id: string) => boolean;
+  isTaken?: (id: string) => boolean;
   registerLive: (
     declaration: TNormalized,
     binding: TBinding,
@@ -410,7 +415,7 @@ function createStagedRegistrations<
       };
       if (options.isActivated()) {
         entry.disposer = options.registerLive(normalized, binding);
-      } else if (options.isTaken(normalized.id)) {
+      } else if (options.isTaken?.(normalized.id) === true) {
         throw new Error(options.alreadyRegisteredMessage(normalized.id));
       }
       entries.set(normalized.id, entry);
@@ -472,14 +477,13 @@ export function createPluginApi(options: {
    * name. Empty when the manifest declares none.
    */
   declaredIconNames: ReadonlySet<string>;
-  requestInteraction: (args: {
-    threadId: string;
-    rendererId: string;
-    title: string;
-    payload: JsonValue;
-    timeoutMs: number;
-    signal?: AbortSignal;
-  }) => Promise<PluginInteractionResult>;
+  brandingIcon: string | undefined;
+  requestInteraction: (
+    args: Omit<NormalizedPluginInteractionRequest, "presentation"> & {
+      presentation: ThreadEventItemPresentation;
+      signal?: AbortSignal;
+    },
+  ) => Promise<PluginInteractionResult>;
   ensureSharedPortTunnel: PluginHosts["ensureSharedPortTunnel"];
   validateSharedPortDeclaration: (
     hostId: string,
@@ -503,17 +507,10 @@ export function createPluginApi(options: {
   registerProvider: (declaration: NormalizedPluginProviderDeclaration) => {
     dispose(): void;
   };
-  registerAiService: (
-    declaration: PluginAiServiceDeclaration,
-    binding: AiServiceHostBinding<PluginHostArtifactSnapshot>,
-  ) => {
+  registerAiService: (declaration: NormalizedPluginAiService) => {
     dispose(): void;
   };
   isProviderIdTaken: (providerId: string) => boolean;
-  isAiServiceIdTaken: (serviceId: string) => boolean;
-  assertAiServiceRegistrable: (
-    serviceId: string,
-  ) => AiServiceHostBinding<PluginHostArtifactSnapshot>;
   assertProviderRegistrable: (providerId: string) => void;
 }): PluginApiHandle {
   const {
@@ -531,6 +528,7 @@ export function createPluginApi(options: {
     reportAgentToolProblem,
     requestQueueDrain,
     declaredIconNames,
+    brandingIcon,
     requestInteraction,
     ensureSharedPortTunnel,
     validateSharedPortDeclaration,
@@ -541,8 +539,6 @@ export function createPluginApi(options: {
     registerAiService,
     isProviderIdTaken,
     assertProviderRegistrable,
-    isAiServiceIdTaken,
-    assertAiServiceRegistrable,
   } = options;
   let invalidated = false;
   let activated = false;
@@ -551,6 +547,7 @@ export function createPluginApi(options: {
   const pendingAgentToolProblems: string[] = [];
   const pendingSharedPorts = new Map<string, readonly number[]>();
   const disposeHooks: Array<() => void | Promise<void>> = [];
+  const installHandlers: Array<() => void | Promise<void>> = [];
   const settingsRecord: PluginApiHandle["settings"] = {
     descriptors: {},
     listeners: [],
@@ -559,6 +556,7 @@ export function createPluginApi(options: {
   const threadEventHandlers: PluginThreadEventHandlers = {
     "experimental_thread.events": [],
     "experimental_terminal.input": [],
+    "experimental_host.deleted": [],
     "thread.created": [],
     "thread.active": [],
     "thread.idle": [],
@@ -620,10 +618,31 @@ export function createPluginApi(options: {
     requestOptions?: Parameters<PluginUi["requestInput"]>[1],
   ) {
     assertLive();
-    return requestInteraction({
-      ...normalizeInteractionRequest(request),
+    const normalized = normalizeInteractionRequest(request);
+    const glyph = normalized.presentation?.icon?.glyph;
+    const iconProblem =
+      glyph === undefined
+        ? null
+        : undeclaredIconProblem(pluginId, declaredIconNames, glyph);
+    if (iconProblem !== null) {
+      throw new Error(`ui.requestInput presentation.icon ${iconProblem}`);
+    }
+    const pending = requestInteraction({
+      ...normalized,
+      presentation: fillPluginPresentation({
+        declared: normalized.presentation,
+        brandingIcon,
+        label: {
+          pending: `Waiting for ${normalized.title}`,
+          completed: `Submitted ${normalized.title}`,
+        },
+      }),
       signal: requestOptions?.signal,
     });
+    if (!requestOptions?.signal?.aborted) {
+      detachActivePluginToolCallForUserInput();
+    }
+    return pending;
   }
 
   const kv: PluginKvStorage = {
@@ -778,12 +797,13 @@ export function createPluginApi(options: {
   };
 
   const rpc: PluginRpc = {
-    register(contract, handlers) {
+    register(contract, handlers, options) {
       assertLive();
       for (const [name, record] of normalizeRpcRegistration(
         contract,
         handlers,
         rpcHandlers,
+        options,
       )) {
         rpcHandlers.set(name, record);
       }
@@ -883,7 +903,7 @@ export function createPluginApi(options: {
       name: string;
       description: string;
       instructions?: string;
-      presentation?: PluginAgentToolPresentation;
+      presentation?: PluginRowPresentation;
       parameters: unknown;
       execute(
         params: never,
@@ -1262,9 +1282,8 @@ export function createPluginApi(options: {
 
   const aiServiceRegistrations = createStagedRegistrations({
     validate: validatePluginAiServiceDeclaration,
-    bind: assertAiServiceRegistrable,
-    isTaken: isAiServiceIdTaken,
-    registerLive: registerAiService,
+    bind: () => null,
+    registerLive: (declaration) => registerAiService(declaration),
     alreadyRegisteredMessage: aiServiceAlreadyRegisteredMessage,
     assertLive,
     isActivated: () => activated,
@@ -1312,11 +1331,19 @@ export function createPluginApi(options: {
       assertLive();
       disposeHooks.push(hook);
     },
+    onInstall(handler) {
+      assertLive();
+      if (typeof handler !== "function") {
+        throw new Error("onInstall expects a function");
+      }
+      installHandlers.push(handler);
+    },
   };
 
   return {
     api,
     disposeHooks,
+    installHandlers,
     settings: settingsRecord,
     databaseHandles,
     threadEventHandlers,

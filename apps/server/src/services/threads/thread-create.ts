@@ -1,6 +1,7 @@
+import { requestThreadStorageDeletion } from "./thread-lifecycle.js";
 import { assertEnvironmentPathAvailable } from "../environments/path-admission.js";
 import {
-  deleteThread,
+  markThreadDeleted,
   getEnvironment,
   getProjectSourceByHost,
   getThread,
@@ -38,7 +39,6 @@ import {
   hostIdForEnvironmentIntent,
   type PendingThreadStartContext,
 } from "./dispatch-attempt.js";
-import { setThreadStartupContext } from "@bb/db";
 import { emitPluginThreadDeleted } from "../plugins/plugin-thread-events.js";
 import {
   createThreadRecord,
@@ -62,6 +62,7 @@ import {
   type ThreadCreateServiceRequestInput,
   type ThreadCreateServiceRequest,
 } from "./thread-create-request.js";
+import { resolveDispatchAuthor } from "./dispatch-author.js";
 import { deriveTitleFallback } from "./title-generation.js";
 import type { ThreadProvisionEnvironmentIntent } from "./thread-startup-store.js";
 import { resolveSystemProviderModels } from "../system/execution-options.js";
@@ -94,31 +95,21 @@ interface ResolveCatalogExecutionDefaultsArgs {
   executionDefaults: ProjectExecutionDefaults | null;
   hostId: string | null;
   providerId: string;
+  providerFallbackCandidates: readonly string[];
   requestedModel: string | null;
 }
 
-async function resolveCatalogExecutionDefaults(
+async function loadCatalogDefaultForProvider(
   deps: ThreadCreateDeps,
-  args: ResolveCatalogExecutionDefaultsArgs,
-): Promise<ProjectExecutionDefaults | null> {
-  if (args.executionDefaults !== null || args.requestedModel !== null) {
-    return args.executionDefaults;
-  }
-  if (args.hostId === null) {
-    throw new ApiError(
-      400,
-      "model_required",
-      "Pick a model: this environment provider has no machine yet to list a default from, and the project has no remembered one.",
-    );
-  }
-
+  args: { cwd?: string; hostId: string; providerId: string },
+): Promise<ProjectExecutionDefaults | ApiError> {
   const catalog = await resolveSystemProviderModels(deps, {
     ...(args.cwd !== undefined ? { cwd: args.cwd } : {}),
     hostId: args.hostId,
     providerId: args.providerId,
   });
   if (catalog.modelLoadError !== null) {
-    throw new ApiError(
+    return new ApiError(
       503,
       "model_catalog_unavailable",
       `Unable to load ${args.providerId} models to resolve the default. Try again once the host is connected and the provider is ready.`,
@@ -131,7 +122,7 @@ async function resolveCatalogExecutionDefaults(
   const defaultModel =
     catalog.models.find((model) => model.isDefault) ?? catalog.models[0];
   if (defaultModel === undefined) {
-    throw new ApiError(
+    return new ApiError(
       503,
       "model_catalog_unavailable",
       `The ${args.providerId} model catalog is empty, so no default model can be resolved.`,
@@ -142,6 +133,38 @@ async function resolveCatalogExecutionDefaults(
     providerId: args.providerId,
     model: defaultModel.model,
   });
+}
+
+async function resolveCatalogExecutionDefaults(
+  deps: ThreadCreateDeps,
+  args: ResolveCatalogExecutionDefaultsArgs,
+): Promise<ProjectExecutionDefaults | null> {
+  if (args.executionDefaults !== null || args.requestedModel !== null) {
+    return args.executionDefaults;
+  }
+
+  if (args.hostId === null) {
+    throw new ApiError(
+      400,
+      "model_required",
+      "Pick a model: this environment provider has no machine yet to list a default from, and the project has no remembered one.",
+    );
+  }
+
+  const candidates = [args.providerId, ...args.providerFallbackCandidates];
+  let lastError: ApiError | null = null;
+  for (const providerId of candidates) {
+    const result = await loadCatalogDefaultForProvider(deps, {
+      ...(args.cwd !== undefined ? { cwd: args.cwd } : {}),
+      hostId: args.hostId,
+      providerId,
+    });
+    if (!(result instanceof ApiError)) {
+      return result;
+    }
+    lastError = result;
+  }
+  throw lastError;
 }
 
 function resolveForkPoint(
@@ -354,9 +377,31 @@ async function createPendingThreadAndAttemptFirstDispatch(
       : getEnvironment(deps.db, args.environmentId);
   if (environment !== null)
     assertEnvironmentPathAvailable(deps, { ...environment, threadId: null });
+  if (args.request.sourceThreadId) {
+    requireLiveSourceThread(deps, {
+      projectId: args.request.projectId,
+      sourceThreadId: args.request.sourceThreadId,
+    });
+  }
+  const startContext: PendingThreadStartContext = {
+    environmentIntent: args.environmentIntent,
+    fork: args.fork?.descriptor ?? null,
+    ...(args.providerInput !== undefined
+      ? { providerInput: args.providerInput }
+      : {}),
+    startedOnBehalfOf: args.request.startedOnBehalfOf,
+    titleProvided: Boolean(args.request.title),
+  };
+  const placementHostId = hostIdForEnvironmentIntent(
+    deps,
+    args.environmentIntent,
+  );
+  if (placementHostId !== null)
+    requireEnvironmentPlacementHost(deps, placementHostId);
   const thread = createThreadRecord(deps, {
     request: args.request,
     environmentId: args.environmentId,
+    startupContext: JSON.stringify({ kind: "pending", ...startContext }),
   });
   let execution: Awaited<ReturnType<typeof buildExecutionOptions>>;
   try {
@@ -381,27 +426,6 @@ async function createPendingThreadAndAttemptFirstDispatch(
       args.request,
       executionPlanArgs,
     );
-
-    const startContext: PendingThreadStartContext = {
-      environmentIntent: args.environmentIntent,
-      fork: args.fork?.descriptor ?? null,
-      ...(args.providerInput !== undefined
-        ? { providerInput: args.providerInput }
-        : {}),
-      startedOnBehalfOf: args.request.startedOnBehalfOf,
-      titleProvided: Boolean(args.request.title),
-    };
-    const placementHostId = hostIdForEnvironmentIntent(
-      deps,
-      args.environmentIntent,
-    );
-    if (placementHostId !== null)
-      requireEnvironmentPlacementHost(deps, placementHostId);
-    setThreadStartupContext(deps.db, {
-      threadId: thread.id,
-      startupContext: JSON.stringify({ kind: "pending", ...startContext }),
-    });
-
     await attemptDispatch(deps, {
       thread,
       payload: {
@@ -418,6 +442,7 @@ async function createPendingThreadAndAttemptFirstDispatch(
       },
       source: { kind: "inline" },
       queuePayload: { kind: "inline" },
+      pluginSubmission: args.request.pluginSubmission ?? null,
       startContext,
       executionDefaults: executionPlanArgs,
       origin: args.request.origin,
@@ -431,7 +456,17 @@ async function createPendingThreadAndAttemptFirstDispatch(
       deletedAt: Date.now(),
       updatedAt: Date.now(),
     });
-    deleteThread(deps.db, deps.hub, thread.id);
+    const deleted = markThreadDeleted(deps.db, deps.hub, {
+      threadId: thread.id,
+    });
+    if (deleted)
+      requestThreadStorageDeletion(
+        deps,
+        deleted,
+        deleted.environmentId
+          ? getEnvironment(deps.db, deleted.environmentId)
+          : null,
+      );
     throw error;
   }
   rememberProjectExecutionDefaultsForCreate(deps, {
@@ -589,25 +624,23 @@ export async function createThreadFromRequest(
     }
   }
   await validatePromptAttachmentReferences({
+    db: deps.db,
     dataDir: deps.config.dataDir,
     input: requestInput.input,
     projectId: requestInput.projectId,
   });
   await deps.providerRegistry.whenRegistrationsSettled();
-  let { executionDefaults, providerId, requestedModel } =
-    resolveProjectExecutionDefaultsForCreate(deps, {
-      executionInputSources: requestInput.executionInputSources,
-      model: requestInput.model,
-      projectId: requestInput.projectId,
-      providerId: requestInput.providerId,
-    });
-  // No hook pass here. Creation is UNHOOKED — a thread row is cheap, costs no
-  // worktree, no setup script and no host resources — and admission happens at
-  // the first message's dispatch attempt, where a plugin sees the thread it is
-  // deciding about and can amend its provider and environment while neither is
-  // settled yet. That collapses what used to be a `thread.create` pass plus a
-  // second re-evaluation pass when it was let through into one checkpoint that
-  // runs the same way every time.
+  const {
+    executionDefaults,
+    providerId,
+    providerFallbackCandidates,
+    requestedModel,
+  } = resolveProjectExecutionDefaultsForCreate(deps, {
+    executionInputSources: requestInput.executionInputSources,
+    model: requestInput.model,
+    projectId: requestInput.projectId,
+    providerId: requestInput.providerId,
+  });
   const {
     originKind: _requestedOriginKind,
     parentThreadId: _requestedParentThreadId,
@@ -693,9 +726,16 @@ export async function createThreadFromRequest(
       executionDefaults,
       hostId: childHostId,
       providerId,
+      providerFallbackCandidates,
       requestedModel,
     },
   );
+  if (
+    resolvedExecutionDefaults !== null &&
+    resolvedExecutionDefaults.providerId !== request.providerId
+  ) {
+    request.providerId = resolvedExecutionDefaults.providerId;
+  }
 
   const { environmentId, environmentIntent } =
     await resolveThreadEnvironmentPlacement(deps, {
@@ -745,10 +785,12 @@ export async function createThreadFromRequest(
       provider: request.providerId,
     },
   });
-  if (
-    (request.startedOnBehalfOf?.initiator ?? "user") === "user" &&
-    request.input.length > 0
-  ) {
+  const { initiator } = resolveDispatchAuthor({
+    retrying: false,
+    senderThreadId: null,
+    startedOnBehalfOf: request.startedOnBehalfOf,
+  });
+  if (initiator === "user" && request.input.length > 0) {
     captureUserMessageSentTelemetry(deps, {
       isChildThread: parentThread !== null,
       messageSource: "thread_create",

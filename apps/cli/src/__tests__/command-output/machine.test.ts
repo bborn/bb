@@ -99,6 +99,32 @@ describe("bb machine command output", () => {
     );
   });
 
+  it("prints a reconnect command and waits for the same host", async () => {
+    const reconnect = vi.fn(async () => ({
+      command: "curl -fsSL reconnect | sh",
+      expiresAt: Date.now() + 60_000,
+      hostId: "host-remote",
+    }));
+    const get = vi.fn(async () => ({
+      ...hosts[1]!,
+      status: "connected" as const,
+    }));
+    stubServerApi({
+      "v1.hosts.$get": vi.fn(async () => hosts),
+      "v1.hosts.:id.reconnect-commands.$post": reconnect,
+      "v1.hosts.:id.$get": get,
+    });
+    await runCommand(["machine", "reconnect", "laptop"], register);
+    expect(reconnect).toHaveBeenCalledOnce();
+    expect(get).toHaveBeenCalledOnce();
+    expect(collectLogPayloads(vi.mocked(console.log))).toEqual([
+      "Machine host-remote keeps its host ID. Run this command on the machine within 15 minutes:",
+      "",
+      "curl -fsSL reconnect | sh",
+      "Machine host-remote reconnected successfully.",
+    ]);
+  });
+
   it("prints the manual enrollment command while following", async () => {
     const command = "curl -fsSL https://machine.example/install.sh | sh";
     stubServerApi({
@@ -210,15 +236,20 @@ describe("bb machine command output", () => {
     },
   );
 
-  it("bb machine list renders names, IDs, status, and relative last seen", async () => {
+  it("bb machine list marks the server machine in the table", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_700_000_120_000);
-    stubServerApi({ "v1.hosts.$get": vi.fn(async () => hosts) });
+    stubServerApi({
+      "v1.hosts.$get": vi.fn(async () => hosts),
+      "v1.system.config.$get": vi.fn(async () => ({
+        primaryHostId: "host-primary",
+      })),
+    });
 
     await runCommand(["machine", "list"], register);
 
     expect(collectLogPayloads(vi.mocked(console.log))).toEqual([
       "",
-      "Name         ID            Type        Status        Provider       Last seen\n-----------  ------------  ----------  ------------  -------------  ---------\nworkstation  host-primary  persistent  connected     user-enrolled  2m ago\n-----------  ------------  ----------  ------------  -------------  ---------\nlaptop       host-remote   persistent  disconnected  ssh            never",
+      "Name         Role    ID            Type        Status        Provider       Last seen\n-----------  ------  ------------  ----------  ------------  -------------  ---------\nworkstation  server  host-primary  persistent  connected     user-enrolled  2m ago\n-----------  ------  ------------  ----------  ------------  -------------  ---------\nlaptop               host-remote   persistent  disconnected  ssh            never",
       "",
     ]);
   });
@@ -231,15 +262,26 @@ describe("bb machine command output", () => {
       type: "ephemeral",
       machineProviderId: "modal-sandbox",
     };
-    stubServerApi({ "v1.hosts.$get": vi.fn(async () => [...hosts, sandbox]) });
+    const list = vi.fn(async ({ query }: { query: { type?: string } }) =>
+      [...hosts, sandbox].filter(
+        (host) => query.type === undefined || host.type === query.type,
+      ),
+    );
+    stubServerApi({ "v1.hosts.$get": list });
 
     await runCommand(["machine", "list", "--json"], register);
+    expect(list).toHaveBeenLastCalledWith({
+      query: { includeCreating: "true", type: "persistent" },
+    });
     expect(
       JSON.parse(String(vi.mocked(console.log).mock.calls[0]?.[0])),
     ).toEqual(hosts);
 
     vi.mocked(console.log).mockClear();
     await runCommand(["machine", "list", "--all", "--json"], register);
+    expect(list).toHaveBeenLastCalledWith({
+      query: { includeCreating: "true" },
+    });
     expect(
       JSON.parse(String(vi.mocked(console.log).mock.calls[0]?.[0])),
     ).toEqual([...hosts, sandbox]);

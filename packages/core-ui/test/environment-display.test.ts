@@ -56,6 +56,7 @@ function makeEnvironment(overrides?: Partial<Environment>): Environment {
     environmentProviderSelection: null,
     environmentProviderInstanceKey: null,
     lifecycle: { phase: "active", retireAt: null, teardown: null },
+    hostLifecycle: "active",
     managed: false,
     workspaceProvisionType: null,
     createdAt: 0,
@@ -76,7 +77,6 @@ describe("formatEnvironmentDisplay", () => {
       ).toEqual({
         modeLabel: "Working locally",
         compactModeLabel: "Local",
-        typeLabel: "Local",
         providerLabel: null,
         lifecycle: null,
         id: "env_test",
@@ -91,7 +91,6 @@ describe("formatEnvironmentDisplay", () => {
       });
       expect(result.modeLabel).toBe("Working remotely");
       expect(result.compactModeLabel).toBe("Remote");
-      expect(result.typeLabel).toBe("Remote");
     });
 
     it("labels a branch-bearing row by its provider, since the branch is shown beside it", () => {
@@ -105,7 +104,6 @@ describe("formatEnvironmentDisplay", () => {
       });
       expect(result.modeLabel).toBe("Worktree");
       expect(result.compactModeLabel).toBe("Worktree");
-      expect(result.typeLabel).toBe("Worktree · Local");
     });
 
     it("prefers the environment name over the branch name", () => {
@@ -139,7 +137,6 @@ describe("formatEnvironmentDisplay", () => {
       });
       expect(result.modeLabel).toBe("Modal sandbox");
       expect(result.compactModeLabel).toBe("Modal sandbox");
-      expect(result.typeLabel).toBe("Modal sandbox · Remote");
     });
 
     it("falls back to the bare provider id when the plugin is not registered", () => {
@@ -151,7 +148,6 @@ describe("formatEnvironmentDisplay", () => {
         providerLookup: noProviderLookup,
       });
       expect(result.modeLabel).toBe("modal-sandbox");
-      expect(result.typeLabel).toBe("modal-sandbox · Remote");
       expect(result.providerLabel).toBe("modal-sandbox");
     });
 
@@ -165,7 +161,6 @@ describe("formatEnvironmentDisplay", () => {
       });
       expect(result.providerLabel).toBeNull();
       expect(result.modeLabel).toBe("Working remotely");
-      expect(result.typeLabel).toBe("Remote");
     });
   });
 
@@ -185,7 +180,7 @@ describe("formatEnvironmentDisplay", () => {
       expect(result.lifecycle).toBe("provisioning");
     });
 
-    it("reports 'Destroyed' for a gone worktree instead of 'Provisioning' (#1789)", () => {
+    it("reports an unavailable environment for a gone worktree instead of 'Provisioning' (#1789)", () => {
       const result = formatEnvironmentDisplay({
         environment: makeEnvironment({
           path: null,
@@ -195,10 +190,31 @@ describe("formatEnvironmentDisplay", () => {
         host: localHostContext,
         providerLookup: worktreeProviderLookup,
       });
-      expect(result.modeLabel).toBe("Destroyed");
-      expect(result.compactModeLabel).toBe("Destroyed");
+      expect(result.modeLabel).toBe("Environment unavailable");
+      expect(result.compactModeLabel).toBe("Environment unavailable");
       expect(result.lifecycle).toBe("destroyed");
     });
+
+    it.each([
+      ["removed", "Unavailable — machine removed"],
+      ["removing", "Machine removal in progress"],
+      ["cleanup-failed", "Machine cleanup failed"],
+    ] as const)(
+      "prioritizes a %s machine over a retained workspace name",
+      (hostLifecycle, label) => {
+        const result = formatEnvironmentDisplay({
+          environment: makeEnvironment({
+            name: "Review workspace",
+            status: "ready",
+            hostLifecycle,
+          }),
+          host: remoteHostContext,
+          providerLookup: noProviderLookup,
+        });
+        expect(result.modeLabel).toBe(label);
+        expect(result.lifecycle).toBe(hostLifecycle);
+      },
+    );
 
     it("keeps a custom name ahead of the lifecycle label", () => {
       const result = formatEnvironmentDisplay({
@@ -272,7 +288,7 @@ describe("resolveEnvironmentDisplayName", () => {
     ).toBe("bb/feature");
   });
 
-  it("names a branchless row by its folder before its provider", () => {
+  it("names a branchless provider row by its provider, not its workspace folder", () => {
     expect(
       resolveEnvironmentDisplayName(
         {
@@ -290,7 +306,10 @@ describe("resolveEnvironmentDisplayName", () => {
           },
         },
       ),
-    ).toBe("thr_k72wqg7tcs");
+    ).toBe("Personal workspace");
+  });
+
+  it("hides a workspace folder that is only an internal instance key", () => {
     expect(
       resolveEnvironmentDisplayName(
         {
@@ -299,8 +318,33 @@ describe("resolveEnvironmentDisplayName", () => {
           path: "C:\\bb\\workspaces\\thr_win",
           environmentProviderId: "personal-workspace",
         },
+        loadingProviderLookup,
+      ),
+    ).toBeNull();
+  });
+
+  it("names a provider-less directory attachment by its folder", () => {
+    expect(
+      resolveEnvironmentDisplayName(
+        {
+          name: null,
+          branchName: null,
+          path: "/Users/bb/Projects/notes/",
+          environmentProviderId: null,
+        },
         noProviderLookup,
       ),
-    ).toBe("thr_win");
+    ).toBe("notes");
+    expect(
+      resolveEnvironmentDisplayName(
+        {
+          name: null,
+          branchName: null,
+          path: "C:\\Users\\bb\\notes",
+          environmentProviderId: null,
+        },
+        noProviderLookup,
+      ),
+    ).toBe("notes");
   });
 });

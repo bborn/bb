@@ -1,5 +1,5 @@
 import type { QueryKey } from "@tanstack/react-query";
-import type { Environment } from "@bb/domain";
+import type { Environment, Host } from "@bb/domain";
 import type { SystemConfigResponse } from "@bb/server-contract";
 import {
   allEnvironmentDiffFilesQueryKeyPrefix,
@@ -9,6 +9,7 @@ import {
   allEnvironmentQueryKeyPrefix,
   allEnvironmentWorkStatusQueryKeyPrefix,
   allHostQueryKeyPrefix,
+  allMachineEnvironmentQueryKeyPrefix,
   allProjectPathsQueryKeyPrefix,
   allSystemExecutionOptionsQueryKeyPrefix,
   allSystemMachineProvidersQueryKeyPrefix,
@@ -31,6 +32,7 @@ import {
   hostPathExistenceQueryKeyPrefix,
   hostsQueryKey,
   projectsQueryKey,
+  serverMoveStatusQueryKey,
   sidebarNavigationQueryKey,
   systemConfigQueryKey,
   threadPromptHistoryQueryKeyPrefix,
@@ -41,6 +43,7 @@ import { allThreadDefaultExecutionOptionsQueryKeyPrefix } from "../queries/threa
 import type { QueryClientArg } from "../cache-effect-types";
 import { clearCachedModelCatalogs } from "@/lib/model-catalog-cache";
 import { bumpAllDiffPatchEvictionGenerations } from "./environment-diff-patch-cache-owner";
+import { invalidateAppUpdateStatus } from "./app-update-cache-owner";
 import { invalidateSystemVersion } from "./system-version-cache-owner";
 import {
   invalidateQueryKeys,
@@ -69,6 +72,7 @@ export function invalidateRealtimeQueriesAfterServerReconnect({
     );
   }
   invalidateSystemVersion({ queryClient });
+  invalidateAppUpdateStatus({ queryClient });
   bumpAllDiffPatchEvictionGenerations();
   queryClient.removeQueries({
     queryKey: allEnvironmentDiffPatchQueryKeyPrefix(),
@@ -106,6 +110,15 @@ export function invalidateSystemConfig({ queryClient }: QueryClientArg): void {
   invalidateQueryKeys({
     queryClient,
     queryKeys: [systemConfigQueryKey(), allSystemThemesQueryKeyPrefix()],
+  });
+}
+
+export function invalidateMachineEnvironment({
+  queryClient,
+}: QueryClientArg): void {
+  invalidateQueryKeys({
+    queryClient,
+    queryKeys: [allMachineEnvironmentQueryKeyPrefix()],
   });
 }
 
@@ -202,5 +215,15 @@ function getServerReconnectInvalidationQueryKeys(): QueryKey[] {
     hostPathExistenceQueryKeyPrefix(),
     allSystemProvidersQueryKeyPrefix(),
     allSystemExecutionOptionsQueryKeyPrefix(),
+    serverMoveStatusQueryKey(),
   ];
+}
+
+export function applyHostRenameResult({
+  host,
+  queryClient,
+}: QueryClientArg & { host: Host }): void {
+  queryClient.setQueryData<Host[]>(hostsQueryKey(), (hosts) =>
+    hosts?.map((current) => (current.id === host.id ? host : current)),
+  );
 }

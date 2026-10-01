@@ -2,16 +2,21 @@ import path from "path";
 import { defineConfig } from "vite";
 import tailwindcss from "@tailwindcss/vite";
 import { resolveCurrentDevInstanceConfig } from "@bb/config/runtime";
+import { forkablePluginPaths } from "../vite-forkable-plugin-paths.js";
 import { sharedUiEnvSeam } from "../vite-shared-ui-seam.js";
 
 const repoRoot = path.resolve(__dirname, "../../..");
 const devInstance = resolveCurrentDevInstanceConfig(repoRoot);
 const trustedDevAppHeaders = {
-  origin: `http://localhost:${devInstance.ports.appPort}`,
+  origin: devInstance.serverUrl,
 };
 
 export default defineConfig({
-  plugins: [sharedUiEnvSeam(), tailwindcss()],
+  plugins: [
+    forkablePluginPaths(path.resolve(__dirname, "../src")),
+    sharedUiEnvSeam(),
+    tailwindcss(),
+  ],
   cacheDir: "node_modules/.vite/ladle",
   worker: {
     format: "es",

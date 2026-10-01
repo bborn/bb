@@ -4,16 +4,24 @@ import { join } from "node:path";
 import {
   createConnection,
   getPluginMarketplace,
+  listPluginMarketplaceIcons,
   markInstalledPluginRemoved,
   migrate,
   upsertPluginMarketplace,
   upsertInstalledPlugin,
   type DbConnection,
 } from "@bb/db";
-import { ROOT_PLUGIN_SOURCE_SELECTION } from "@bb/server-contract";
+import {
+  CURATED_PLUGIN_MARKETPLACE_NAME,
+  ROOT_PLUGIN_SOURCE_SELECTION,
+} from "@bb/server-contract";
 import { PLUGIN_CATALOG_CATEGORIES } from "@bb/domain";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginCatalogService } from "../../../src/services/plugin-catalog/plugin-catalog-service.js";
+import {
+  SERVER_MOVE_FROZEN_RETRY_MS,
+  setServerMoveFrozen,
+} from "../../../src/services/server-move/freeze-state.js";
 import { refreshCuratedMarketplace } from "../../helpers/plugin-catalog.js";
 import type { MarketplaceFetch } from "../../../src/services/plugin-catalog/marketplace-http.js";
 import {
@@ -196,7 +204,14 @@ describe("plugin catalog service", () => {
       icon: "FileText",
       iconUrl: null,
       category: "File Viewers & Editors",
-      screenshots: [],
+      screenshots: [
+        "https://getbb.app/marketplace/v2/screenshots/docs/docs-21ddb6757-inline-review-desktop.png",
+        "https://getbb.app/marketplace/v2/screenshots/docs/docs-f4957b72f-inline-editing-desktop.png",
+        "https://getbb.app/marketplace/v2/screenshots/docs/docs-f4957b72f-ask-mobile.png",
+        "https://getbb.app/marketplace/v2/screenshots/docs/docs-63b536e70-workspace-desktop.png",
+        "https://getbb.app/marketplace/v2/screenshots/docs/docs-21ddb6757-html-desktop.png",
+        "https://getbb.app/marketplace/v2/screenshots/docs/docs-21ddb6757-vault-desktop.png",
+      ],
       collections: [
         {
           id: "bb-official",
@@ -1212,25 +1227,45 @@ describe("plugin catalog service", () => {
   });
 
   describe("catalog limits and trust", () => {
-    it("refuses a manifest that lists more than the entry limit", async () => {
-      const oversize = manifest(
-        Array.from({ length: 257 }, (_unused, index) =>
-          remoteEntry({ id: `widgets-${index}` }),
+    it("refreshes and searches a catalog with more than 1024 entries", async () => {
+      const largeManifest = manifest(
+        Array.from({ length: 1025 }, (_unused, index) =>
+          remoteEntry({ id: `widgets-${index}`, icon: "Zap" }),
         ),
       );
       const catalog = service({
-        fetch: async () => jsonResponse(oversize),
+        fetch: async () => jsonResponse(largeManifest),
       });
 
-      await expect(refreshCuratedMarketplace(catalog, 1_000)).rejects.toThrow(
-        /at most 256 plugins/u,
-      );
-      expect(getPluginMarketplace(db, "bb-community")?.lastError).toMatch(
-        /at most 256 plugins/u,
-      );
+      await refreshCuratedMarketplace(catalog, 1_000);
+      expect(getPluginMarketplace(db, "bb-community")?.lastError).toBeNull();
+      expect(await catalog.search("widgets")).toHaveLength(1025);
+      expect(await catalog.search("widgets-1024")).toEqual([
+        expect.objectContaining({ entryId: "widgets-1024" }),
+      ]);
     });
 
-    it("refuses a catalog whose icons pass the total byte budget", async () => {
+    it("refreshes a remote manifest larger than 1 MiB", async () => {
+      const largeManifest = manifest(
+        Array.from({ length: 600 }, (_unused, index) =>
+          remoteEntry({
+            id: `widgets-${index}`,
+            icon: "Zap",
+            description: "x".repeat(2_000),
+          }),
+        ),
+      );
+      expect(JSON.stringify(largeManifest).length).toBeGreaterThan(1_048_576);
+      const catalog = service({
+        fetch: async () => jsonResponse(largeManifest),
+      });
+
+      await refreshCuratedMarketplace(catalog, 1_000);
+      expect(getPluginMarketplace(db, "bb-community")?.lastError).toBeNull();
+      expect(await catalog.search("widgets")).toHaveLength(600);
+    });
+
+    it("stores catalog icons totaling more than 8 MiB", async () => {
       const bigSvg = Buffer.from(
         `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><title>${"a".repeat(200 * 1024)}</title><path d="M0 0h16v16H0z"/></svg>`,
       );
@@ -1250,9 +1285,12 @@ describe("plugin catalog service", () => {
               }),
       });
 
-      await expect(refreshCuratedMarketplace(catalog, 1_000)).rejects.toThrow(
-        /exceed the 8388608 byte total limit/u,
-      );
+      await refreshCuratedMarketplace(catalog, 1_000);
+      const icons = listPluginMarketplaceIcons(db, "bb-community");
+      expect(icons).toHaveLength(64);
+      expect(
+        icons.reduce((total, icon) => total + icon.bytes.byteLength, 0),
+      ).toBeGreaterThan(8 * 1024 * 1024);
     });
 
     it("fetches entry icons concurrently", async () => {
@@ -1370,5 +1408,36 @@ describe("plugin catalog service", () => {
         "npm:bb-plugin-widgets@^1.0.0 (registry https://npm.acme.test)",
       );
     });
+  });
+
+  it("defers the periodic marketplace refresh while the server is moving", async () => {
+    const fetched: string[] = [];
+    const catalog = service({
+      fetch: async (url) => {
+        fetched.push(String(url));
+        return new Response(null, { status: 503 });
+      },
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    setServerMoveFrozen(db, true);
+    try {
+      catalog.startPeriodicRefresh();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetched).toEqual([]);
+      expect(
+        getPluginMarketplace(db, CURATED_PLUGIN_MARKETPLACE_NAME)
+          ?.lastAttemptedRefreshAt,
+      ).toBeNull();
+
+      setServerMoveFrozen(db, false);
+      await vi.advanceTimersByTimeAsync(SERVER_MOVE_FROZEN_RETRY_MS);
+      await vi.waitFor(() => {
+        expect(fetched).not.toEqual([]);
+      });
+    } finally {
+      catalog.stopPeriodicRefresh();
+      setServerMoveFrozen(db, false);
+      vi.useRealTimers();
+    }
   });
 });

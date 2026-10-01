@@ -44,8 +44,7 @@ def source_files(repo):
         name for name in result.stdout.decode().split('\0')
         if name and (repo / name).is_file()
         and not re.search(r'(?:\.test\.|\.spec\.|/tests/|/__tests__/|/test-fixtures)', name)
-        and (Path(name).suffix in {'.ts', '.tsx', '.json', '.css', '.mjs', '.sh'}
-             or name == 'scripts/bb-dev-app')
+        and Path(name).suffix in {'.ts', '.tsx', '.json', '.css', '.mjs', '.sh'}
     })
 
 
@@ -109,7 +108,7 @@ def collect(repo):
     add('app-and-shared-ui', under('apps/app/src/', 'packages/client-core/src/', 'packages/shared-ui/src/'), CORE_PAGES)
     add('domain-contracts', under('packages/domain/src/'), CORE_PAGES)
     add('public-api-and-sdk', under('packages/server-contract/src/', 'packages/sdk/src/'), CORE_PAGES, True)
-    add('plugin-sdk-and-guide', under('packages/plugin-sdk/src/', 'packages/plugin-api-map/src/'), ['extensions', 'plugin-plugin-api-docs', 'developer-fixtures'])
+    add('plugin-sdk-and-guide', under('packages/plugin-sdk/src/', 'plugins/plugin-api-docs/src/'), ['extensions', 'plugin-plugin-api-docs', 'developer-fixtures'])
     for manifest in sorted((repo / 'plugins').glob('*/package.json')):
         data = json.loads(manifest.read_text())
         if 'bb' not in data:
@@ -122,7 +121,7 @@ def collect(repo):
     ]:
         add(f'app:{app}', under(f'apps/{app}/'), [owner], True)
     add('server-and-daemon', under('apps/server/src/', 'apps/host-daemon/src/'), CORE_PAGES)
-    add('dev-harness', [name for name in under('scripts/') if 'bb-dev-app' in name or 'cloud-dev' in name], ['developer-fixtures'])
+    add('dev-harness', [name for name in under('scripts/') if 'cloud-dev' in name], ['developer-fixtures'])
     return {'schemaVersion': 1, 'groups': dict(sorted(groups.items()))}
 
 

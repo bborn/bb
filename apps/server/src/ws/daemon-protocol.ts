@@ -4,6 +4,7 @@ import { heartbeatSession } from "@bb/db";
 import {
   hasHostDaemonWebSocketProtocol,
   hostDaemonDaemonWsMessageSchema,
+  type HostDaemonDaemonWsMessage,
 } from "@bb/host-daemon-contract";
 import { ApiError } from "../errors.js";
 import { verifyAuthenticatedDaemon } from "../internal/auth.js";
@@ -16,7 +17,12 @@ import {
   getInactiveSessionLogFields,
   requireAuthorizedOpenSession,
 } from "../internal/session-state.js";
-import { handleDaemonSocketClosed } from "../internal/session-owner-side-effects.js";
+import {
+  handleDaemonSessionSilent,
+  handleDaemonSocketClosed,
+  handleDaemonSocketOpened,
+} from "../internal/session-owner-side-effects.js";
+import { HEARTBEAT_INTERVAL_MS, LEASE_TIMEOUT_MS } from "../constants.js";
 import {
   notifyDaemonEnvironmentChange,
   recordDaemonEnvironmentMetadataChange,
@@ -25,6 +31,12 @@ import { requestQueuedMessageDispatch } from "../services/threads/queued-message
 import { runEventLoopWorkSync } from "../services/system/event-loop-work.js";
 import { parseSocketMessage } from "./decode-payload.js";
 import type { PluginService } from "../services/plugins/plugin-service.js";
+import type { ServerMoveCoordinator } from "../services/server-move/coordinator.js";
+import {
+  isServerMoveFrozen,
+  isServerMoveSnapshotFenced,
+} from "../services/server-move/freeze-state.js";
+import { resumeEnvironmentProvisioningForHost } from "../services/environments/environment-engine.js";
 
 interface DaemonSocket {
   close(code?: number, reason?: string): void;
@@ -73,6 +85,17 @@ export async function validateDaemonWebSocket(
   };
 }
 
+export const SERVER_MOVE_FENCED_DAEMON_MESSAGE_TYPES: ReadonlySet<
+  HostDaemonDaemonWsMessage["type"]
+> = new Set([
+  "environment-metadata-change",
+  "desktop-browser.changed",
+  "plugin-host.signal",
+  "plugin-host.worker-exited",
+  "terminal.opened",
+  "terminal.exited",
+]);
+
 export function onDaemonSocketOpen(
   deps: LoggedPendingInteractionWorkSessionDeps &
     Pick<AppDeps, "hub" | "logger" | "sharedPorts" | "terminalSessions">,
@@ -83,11 +106,17 @@ export function onDaemonSocketOpen(
     "Daemon WebSocket opened",
   );
   deps.hub.registerDaemon(args.sessionId, args.hostId, args.socket);
+  handleDaemonSocketOpened(deps, { hostId: args.hostId });
   deps.sharedPorts.pushCurrentSharedPortsForHost(args.hostId);
-  deps.terminalSessions.expireDisconnectedHostTerminals({
-    daemonSessionId: args.sessionId,
-    hostId: args.hostId,
-  });
+  if (!isServerMoveSnapshotFenced(deps.db)) {
+    deps.terminalSessions.reconcileDisconnectedHostTerminals({
+      daemonSessionId: args.sessionId,
+      hostId: args.hostId,
+    });
+  }
+  if (isServerMoveFrozen(deps.db)) {
+    return;
+  }
   // A dispatch that arrived while this machine was away parked its row on a
   // `host-offline` wait with no schedule, so no sweep can see it — the
   // machine coming back is that wait's release signal, and this socket
@@ -95,6 +124,18 @@ export function onDaemonSocketOpen(
   requestQueuedMessageDispatch(deps, {
     hostId: args.hostId,
     kind: "host-connected",
+  });
+  void resumeEnvironmentProvisioningForHost(deps, {
+    hostId: args.hostId,
+  }).catch((error) => {
+    deps.logger.warn(
+      {
+        err: error,
+        hostId: args.hostId,
+        sessionId: args.sessionId,
+      },
+      "Environment provisioning reconnect resume failed",
+    );
   });
 }
 
@@ -105,7 +146,9 @@ export function onDaemonSocketMessage(
   >,
   args: DaemonSocketMessageArgs,
   plugins?: Pick<PluginService, "handleHostSignal" | "handleHostWorkerExit">,
+  serverMove?: Pick<ServerMoveCoordinator, "handleProgress">,
 ): void {
+  deps.hub.recordDaemonActivity(args.sessionId);
   const message = parseSocketMessage(
     args.socket,
     args.raw,
@@ -129,6 +172,26 @@ export function onDaemonSocketMessage(
           session.leaseExpiresAt + 1,
         ),
       );
+      if (
+        isServerMoveSnapshotFenced(deps.db) &&
+        SERVER_MOVE_FENCED_DAEMON_MESSAGE_TYPES.has(message.type)
+      ) {
+        if (message.type === "terminal.opened") {
+          deps.terminalSessions.refuseDaemonTerminalOpen({
+            message,
+            sessionId: args.sessionId,
+          });
+        }
+        deps.logger.debug(
+          {
+            hostId: args.hostId,
+            messageType: message.type,
+            sessionId: args.sessionId,
+          },
+          "Ignoring a daemon change while the server is moving",
+        );
+        return;
+      }
       if (message.type === "environment-change") {
         notifyDaemonEnvironmentChange(deps, {
           hostId: args.hostId,
@@ -209,6 +272,10 @@ export function onDaemonSocketMessage(
         reportEnvironmentHookProgress(deps, args.hostId, message);
         return;
       }
+      if (message.type === "server_move.progress") {
+        serverMove?.handleProgress(args.hostId, message);
+        return;
+      }
       if (message.type === "plugin-host.signal") {
         plugins?.handleHostSignal({
           authenticatedHostId: args.hostId,
@@ -270,17 +337,27 @@ export function onDaemonSocketMessage(
   }
 }
 
+const DAEMON_LIVENESS_CHECK_INTERVAL_MS = HEARTBEAT_INTERVAL_MS;
+const DAEMON_LIVENESS_MAX_QUIET_CHECKS = Math.ceil(
+  LEASE_TIMEOUT_MS / DAEMON_LIVENESS_CHECK_INTERVAL_MS,
+);
+
+export function startDaemonLivenessChecks(
+  deps: LoggedPendingInteractionWorkSessionDeps & Pick<AppDeps, "sharedPorts">,
+): () => void {
+  const interval = setInterval(() => {
+    for (const sessionId of deps.hub.takeSilentDaemonSessionIds(
+      DAEMON_LIVENESS_MAX_QUIET_CHECKS,
+    )) {
+      handleDaemonSessionSilent(deps, { sessionId });
+    }
+  }, DAEMON_LIVENESS_CHECK_INTERVAL_MS);
+  interval.unref();
+  return () => clearInterval(interval);
+}
+
 export function onDaemonSocketClose(
-  deps: Pick<
-    AppDeps,
-    | "db"
-    | "hub"
-    | "logger"
-    | "pendingInteractions"
-    | "providerRegistry"
-    | "sharedPorts"
-    | "terminalSessions"
-  >,
+  deps: LoggedPendingInteractionWorkSessionDeps & Pick<AppDeps, "sharedPorts">,
   sessionId: string,
 ): void {
   handleDaemonSocketClosed(deps, {

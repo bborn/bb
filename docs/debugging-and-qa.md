@@ -3,6 +3,8 @@
 - `pnpm dev` prints the active frontend URL, server API URL, host daemon port, data dir, and logs dir. Do not assume fixed dev ports.
 - `pnpm start:worktree` builds production artifacts and serves the optimized app bundle from the checkout-specific dev server URL, while keeping the same dev data directory and deterministic server/host-daemon ports. It has no Vite dev server or hot reload.
 - `pnpm start:worktree-remote` is the trusted-network variant of `pnpm start:worktree`; it binds that server to all IPv4 interfaces.
+- `pnpm desktop` packages the Electron app and launches it against the installed data directory, ports and Electron user-data directory, the same targets a released build uses. It therefore shares the single-instance lock with an installed bb: quit that first, or the launch focuses it instead of starting your build.
+- `pnpm desktop:worktree` packages and launches it against this checkout's data directory and deterministic ports, the same instance `pnpm start:worktree` uses, so a packaged build never touches `~/.bb` or port 38886. It also points Electron's own user-data directory at `$BB_DATA_DIR/desktop` — window state, storage and the single-instance lock all live there. Without that the build would share `~/Library/Application Support/bb` with an installed bb, fail to take the lock, and quit while the installed app focuses itself, which reads as a successful launch of code that never ran. Override it with `BB_DESKTOP_USER_DATA_DIR`. It refuses to start when the server or host-daemon port is busy, because a stale server there would answer for the build you meant to test. DevTools stay closed unless you set `BB_DESKTOP_OPEN_DEVTOOLS=1`, matching a released build. Both commands always repackage first; Turbo caches everything except electron-builder itself. Signing is left to electron-builder's keychain auto-discovery, so machines without a Developer ID identity produce unsigned artifacts and macOS shows the usual first-launch warning.
 - The packaged app defaults to server/frontend `:38886`, host daemon `:38887`, data dir `~/.bb/`, and logs under `~/.bb/logs/`.
 - `bb-app` (including `pnpm start`), `bb-server`, and `bb-host-daemon` capture service stdout and stderr directly in `logs/server-stdio.log` and `logs/host-daemon-stdio.log` under the selected data directory. These append across restarts and are separate from rotating application logs. Use `tail -F` on these files for console output and early startup errors; service output is no longer forwarded to the launcher's terminal.
 - Entity IDs in URLs (`proj_*`, `thr_*`) are primary keys. Query them directly against the active data dir: `sqlite3 <data>/bb.db "SELECT * FROM threads WHERE id = 'thr_xxx';"`.
@@ -10,27 +12,103 @@
 - Use `curl` against the server API to isolate frontend issues from server behavior.
 - Use the CLI to inspect state: `pnpm bb thread show <id>`, `pnpm bb project list`, `pnpm bb status`. From source, use `pnpm bb:dev`.
 
-## Local Dev QA Launcher
+## Native Draft Rollback
 
-Use `scripts/bb-dev-app` when validating changes in the desktop dev app or helping QA from this checkout:
+Migration `0132_thread_drafts` now only adds the temporary `threads.draft`
+column. Its original pre-release SQL merged Drafts plugin queue entries into
+that column and deleted the held rows and built-in plugin installation. The
+original hash remains accepted by `migration-history.ts` for databases that
+already ran it; it is not replayed.
 
-- `pnpm dev:status` runs `scripts/bb-dev-app status` to print the active branch, Node runtime, dev URLs, data dir, and logs.
-- `scripts/bb-dev-app current` restarts the dev server on the current branch.
-- `scripts/bb-dev-app main` fetches `origin/main`, fast-forwards `main`, and launches the dev server from this checkout.
-- `scripts/bb-dev-app branch <branch>` switches to a local branch, or creates it from `origin/<branch>`, then launches the dev server.
-- `pnpm dev:stop` runs `scripts/bb-dev-app stop` to stop the launcher-managed dev server and desktop.
-- `scripts/bb-dev-app logs dev` and `scripts/bb-dev-app logs desktop` follow logs.
+Migration `0133_remove_thread_drafts` drops the column without converting its
+contents back into queued messages. Databases upgrading through the revised
+`0132` retain their existing queue rows and Drafts plugin installation. Databases
+that ran the original `0132` lose the stored core draft contents, retaining their
+thread rows and any remaining queued messages. The restored built-in plugin is
+installed through normal server startup. Reintroducing native drafts requires
+a new migration after `0133`.
 
-By default the launcher starts only the dev server (web frontend, server, host daemon) and prints the URL without opening a browser. Pass `--open` to open the browser after startup. Pass `--desktop` (e.g. `scripts/bb-dev-app current --desktop`) to also launch the Electron desktop shell — only do this when the user is testing a desktop-only change.
+## Archive Confirmation Counts
 
-The launcher uses the Node executable from the caller's `PATH`. It does not select another installed Node version. The `.nvmrc` file pins the primary development runtime to Node 22.19.0. Node 24 and Node 26 remain compatibility targets. Desktop development requires Node 22.19 or newer in the Node 22 release line.
+`GET /api/v1/threads/:id/child-summary` and `sdk.threads.childSummary` return
+`nonDeletedChildCount` for deletion (direct children, including archived rows)
+and `unarchivedDescendantCount` for archive confirmation. The latter follows
+the same hierarchy, lifecycle-owner, and hidden source-fork edges as
+`archive-all`, deduplicates threads, traverses archived intermediaries, and
+excludes already archived or deleted candidates and the requested root.
+The UI adds the root to the displayed total and skips confirmation when no
+unarchived descendants remain. The summary is a preview; concurrent changes
+can alter the eventual archive result. CLI and SDK archive calls remain
+non-interactive.
+
+## Thread Storage Media Responses
+
+`GET /api/v1/threads/:id/thread-storage/files/:filePath` supports a single
+HTTP byte range for media playback and seeking. Responses advertise
+`Accept-Ranges: bytes`; bounded, open-ended, and suffix ranges return `206`
+with `Content-Range` and the selected bytes. Unsatisfiable ranges return `416`
+with `Content-Range: bytes */<size>`. Malformed ranges, unsupported units, and
+multipart ranges fall back to the full `200` response. HEAD ignores Range.
+
+`If-None-Match` revalidation takes precedence over Range. Storage responses use
+weak metadata ETags (`W/"file-<revision>"`), not content SHA-256 hashes. This
+avoids reading an entire large file just to validate it. Because the validator
+is weak, any `If-Range` header falls back to a full `200` response, including a
+matching weak tag or date. HTML previews retain their sandbox CSP, no-store
+policy, and 5 MiB size limit.
+
+The server uses `host.read_file_chunk` for a metadata-only probe (`length: 0`),
+then reads at most 1 MiB per RPC as the HTTP consumer pulls data. HEAD, `304`,
+and `416` responses read no contents. Cancelling or aborting stops subsequent
+reads; an already in-flight RPC can finish. Each RPC opens and closes its file
+handle, so no remote read session needs cleanup. Offsets and lengths are
+validated at the daemon boundary, and paths remain confined to thread storage.
+
+The daemon returns a revision based on device, inode, size, and nanosecond
+mtime/ctime. Every content read checks the expected revision before and after
+reading from its open descriptor. A mismatch before response headers produces
+retryable `409 file_changed`; a change or error after streaming starts aborts
+the HTTP body. The server also rejects short/misaligned chunks. This detects
+ordinary writes, truncation, and replacement; it is not an immutable filesystem
+snapshot or a cryptographic guarantee against changes hidden by filesystem
+metadata granularity.
+
+Thread-storage downloads now bypass the old whole-file size caps (including
+the 25 MiB non-image cap). Each chunk stays bounded regardless of file size.
+Existing `host.read_file` consumers and other raw-file routes retain their
+whole-file limits and SHA-256 validators. No public SDK/CLI request shape
+changed. Host-daemon protocol 219 introduces the chunk RPC and requires daemon
+updates; older enrolled daemons cannot serve this new path until updated.
+
+## Stale Workspace Claims
+
+Failed thread provisioning immediately requests environment cleanup. If a previous
+failure left a claim behind, sends, environment admission, and provider path claims
+repair it when they encounter it; restarting the server is not required.
+
+Claims owned by threads that are still starting or stopping remain blocked. A stale
+claim on a ready or shared checkout is released locally, preserving the workspace.
+A partially created environment retains its claim and is scheduled for the existing
+background lifecycle cleanup. Sends report `workspace_busy` with “Workspace cleanup
+is pending. Try again shortly.” until removal completes. Provider cleanup is never
+awaited by this admission repair, and startup does not scan for abandoned claims.
+
+## Local Dev QA
+
+Run `pnpm dev` from this checkout and keep it running in a terminal. It prints
+the checkout-specific URLs, data directory, and logs directory. Stop it with
+Ctrl-C. For desktop-only changes, start
+`pnpm exec turbo run dev --filter=@bb/desktop` in a second terminal.
+
+Use the Node version in `.nvmrc` (22.19.0). Desktop development requires
+Node 22.19 or newer in the Node 22 release line.
 
 A bb connect shared-port URL is a different browser origin from localhost. If
 QA through that URL needs the browser-local host daemon, restart the dev app
 with the share origin configured after exposing its app port:
 
 ```bash
-BB_APP_URL=https://<handle>--<app-port>.getbb.app scripts/bb-dev-app current
+BB_APP_URL=https://<handle>--<app-port>.getbb.app pnpm dev
 ```
 
 The port remains stable for the checkout, so the existing share continues to
@@ -38,14 +116,14 @@ work after the restart. The host daemon intentionally rejects remote origins
 that are not configured; otherwise any webpage could drive its local editor
 API.
 
-Branch switches intentionally keep dirty work in this checkout; git will stop if a local file would be overwritten. Set `BB_DEV_APP_STASH_DIRTY=1` for a one-off launch that stashes first.
-
-For CLI QA against the dev instance, run `eval "$(scripts/bb-dev-app env)"` first. This sets `BB_SERVER_URL`, `BB_HOST_DAEMON_PORT`, and `BB_PROJECT_ID=proj_personal` so `pnpm bb:dev ...` does not accidentally target the packaged app.
+For CLI QA, `pnpm bb:dev` derives this checkout's server and daemon endpoints.
+In the test shell, clear inherited endpoint and thread context overrides first
+so commands target the dev instance. Keep these changes inside that shell.
 
 Test agents with:
 
 ```bash
-eval "$(scripts/bb-dev-app env)"
+unset BB_SERVER_URL BB_HOST_DAEMON_PORT BB_THREAD_ID BB_ENVIRONMENT_ID BB_THREAD_STORAGE BB_PROJECT_ID BB_CLI BB_CLI_REEXEC
 pnpm bb:dev thread spawn --project proj_personal --provider codex --permission-mode accept-edits --title "Smoke test" --prompt "Reply only with ok." --json
 ```
 
@@ -133,8 +211,13 @@ Export `BB_PROVIDER_BRIDGE_RECORD_DIR` before you start the dev app and every
 provider bridge records its runtime and provider wires as NDJSON:
 
 ```bash
-BB_PROVIDER_BRIDGE_RECORD_DIR=$HOME/.bb/provider-recordings/raw scripts/bb-dev-app current
-eval "$(scripts/bb-dev-app env)"
+BB_PROVIDER_BRIDGE_RECORD_DIR=$HOME/.bb/provider-recordings/raw pnpm dev
+```
+
+In a second terminal, run:
+
+```bash
+unset BB_SERVER_URL BB_HOST_DAEMON_PORT BB_THREAD_ID BB_ENVIRONMENT_ID BB_THREAD_STORAGE BB_PROJECT_ID BB_CLI BB_CLI_REEXEC
 pnpm bb:dev thread spawn --project proj_personal --provider codex --prompt "Run git status." --json
 ls ~/.bb/provider-recordings/raw/codex/
 ```
@@ -159,7 +242,7 @@ Use `pnpm seed:perf` to fill a dev database with a large, realistic fixture:
 many projects, ~1,200 threads, and ~400k event rows with production-like
 payloads. Use it to reproduce performance problems that only appear at scale.
 
-- Start the dev app once first (`scripts/bb-dev-app current`), then stop it and
+- Start the dev app once first (`pnpm dev`), then stop it and
   seed. The fixture then attaches to the real local host, so agents still run.
 - By default the command seeds this checkout's dev data dir. Pass
   `--data-dir <path>` for another target. The command refuses to touch `~/.bb`.

@@ -2,7 +2,6 @@ import { useMemo, type CSSProperties } from "react";
 import type {
   DraggableAttributes,
   DraggableSyntheticListeners,
-  DropAnimation,
 } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -10,12 +9,6 @@ import { CSS } from "@dnd-kit/utilities";
 const SIDEBAR_SORTABLE_TRANSITION = {
   duration: 160,
   easing: "cubic-bezier(0.2, 0, 0, 1)",
-};
-
-export const SIDEBAR_DRAG_OVERLAY_DROP_ANIMATION: DropAnimation = {
-  duration: 180,
-  easing: "cubic-bezier(0.2, 0, 0, 1)",
-  sideEffects: null,
 };
 
 export interface SidebarSortableDragBindings {
@@ -53,15 +46,16 @@ export function useSidebarSortable({
     transform,
     transition,
   } = useSortable({ id, disabled, transition: SIDEBAR_SORTABLE_TRANSITION });
+  const lifted = displace && isDragging;
   const style = useMemo<CSSProperties>(
     () => ({
       transform: displace ? CSS.Translate.toString(transform) : undefined,
       transition: displace ? transition : undefined,
-      position: isDragging ? "relative" : undefined,
-      zIndex: isDragging ? 100 : undefined,
+      position: lifted ? "relative" : undefined,
+      zIndex: lifted ? 100 : undefined,
       opacity: isDragging ? 0.8 : undefined,
     }),
-    [displace, isDragging, transform, transition],
+    [displace, isDragging, lifted, transform, transition],
   );
   const dragBindings = useMemo<SidebarSortableDragBindings>(
     () => ({ attributes, disabled, listeners, setActivatorNodeRef }),

@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import { createTasksStore, TasksPageCursorError } from "./db";
+import {
+  createTasksStore,
+  type CreatePresetInput,
+  TasksPageCursorError,
+} from "./db";
 
 function setup() {
   const { bb, harness } = createFakePluginHost({ pluginId: "tasks-db-test" });
@@ -320,6 +324,35 @@ describe("tasks storage", () => {
           activeOnly: true,
         }),
       ).toEqual([active]);
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it("finds all search terms without requiring their input order", async () => {
+    const { harness, store } = setup();
+    try {
+      const project = createProject(store, "SRC");
+      const matching = store.createTask({
+        projectId: project.id,
+        title: "Deployment readiness review",
+      });
+      store.createTask({
+        projectId: project.id,
+        title: "Deployment schedule",
+      });
+      store.createTask({
+        projectId: project.id,
+        title: "Readiness checklist",
+      });
+
+      const matchingKeys = (search: string) =>
+        store
+          .listTasks({ projectId: project.id, search })
+          .map((task) => task.key);
+
+      expect(matchingKeys("deployment readiness")).toEqual([matching.key]);
+      expect(matchingKeys("readiness deployment")).toEqual([matching.key]);
     } finally {
       await harness.dispose();
     }
@@ -775,14 +808,14 @@ describe("tasks storage", () => {
   it("rejects duplicate preset names", async () => {
     const { harness, store } = setup();
     try {
-      const preset = {
+      const preset: CreatePresetInput = {
         name: "Default",
         providerId: "openai",
         modelId: "gpt-5",
         reasoningLevel: "high",
         serviceTier: null,
         permissionMode: "accept-edits",
-        environmentKind: "project-default" as const,
+        environmentKind: "project-default",
         baseBranch: null,
         machineId: null,
         instructions: "Work the task.",

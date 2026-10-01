@@ -42,6 +42,7 @@ function makeEnvironment(overrides: EnvironmentOverrides = {}): Environment {
     environmentProviderSelection: null,
     environmentProviderInstanceKey: null,
     lifecycle: { phase: "active", retireAt: null, teardown: null },
+    hostLifecycle: "active",
     managed: false,
     workspaceProvisionType: null,
     createdAt: 1,
@@ -598,7 +599,7 @@ describe("@bb/sdk", () => {
           jsonResponse({
             body: {
               code: "invalid_request",
-              message: "Attachment exceeds 10MB limit",
+              message: "huge.png is 36MB, over the 35MB attachment limit",
             },
             status: 400,
           }),
@@ -615,7 +616,7 @@ describe("@bb/sdk", () => {
       }),
     ).rejects.toMatchObject({
       code: "invalid_request",
-      message: "HTTP 400: Attachment exceeds 10MB limit",
+      message: "HTTP 400: huge.png is 36MB, over the 35MB attachment limit",
       status: 400,
     });
   });
@@ -1341,6 +1342,10 @@ describe("@bb/sdk", () => {
       input: [{ type: "text", text: "Accept edits", mentions: [] }],
       mode: "start",
       permissionMode: "accept-edits",
+      pluginSubmission: {
+        pluginId: "example-plugin",
+        data: { action: "hold" },
+      },
     });
     await sdk.threads.queuedMessages.create({
       threadId: "thr_auto",
@@ -1352,7 +1357,13 @@ describe("@bb/sdk", () => {
       queue.requests.map((request) => JSON.parse(request.bodyText ?? "{}")),
     ).toEqual([
       expect.objectContaining({ permissionMode: "auto" }),
-      expect.objectContaining({ permissionMode: "accept-edits" }),
+      expect.objectContaining({
+        permissionMode: "accept-edits",
+        pluginSubmission: {
+          pluginId: "example-plugin",
+          data: { action: "hold" },
+        },
+      }),
       expect.objectContaining({ permissionMode: "full" }),
     ]);
   });
@@ -1643,6 +1654,29 @@ describe("@bb/sdk", () => {
     // No filters at all: the occupying set is small, and a caller that needs
     // more than "which ids, on which hosts" fetches the threads it named.
     expect(queue.requests[0].url).toBe("http://bb.test/api/v1/threads/running");
+  });
+
+  it("lists thread sections without fetching sidebar projects", async () => {
+    const sections = [
+      { id: "sec_123", name: "Review", createdAt: 1, updatedAt: 2 },
+    ];
+    const queue = createFetchQueue([{ body: sections }]);
+    const sdk = createBbSdk({
+      transport: createHttpTransport({
+        baseUrl: "http://bb.test",
+        fetch: queue.fetch,
+        runtime: "node",
+      }),
+    });
+
+    await expect(sdk.threadSections.list()).resolves.toEqual(sections);
+    expect(queue.requests).toEqual([
+      {
+        bodyText: undefined,
+        method: "GET",
+        url: "http://bb.test/api/v1/thread-sections",
+      },
+    ]);
   });
 
   it("exposes thread section mutations", async () => {

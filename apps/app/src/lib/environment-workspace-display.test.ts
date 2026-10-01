@@ -7,17 +7,21 @@ import {
   getEnvironmentDisplayIconName,
   getEnvironmentWorkspaceInfoDisplay,
   getEnvironmentWorkspaceSummaryDisplay,
-  shouldShowEnvironmentHostIdentity,
+  isHostAmbiguous,
 } from "./environment-workspace-display";
 
-describe("shouldShowEnvironmentHostIdentity", () => {
-  it("keeps the machine identity for a projectless thread with one machine", () => {
-    expect(shouldShowEnvironmentHostIdentity(false, true, "persistent")).toBe(
-      true,
-    );
-    expect(shouldShowEnvironmentHostIdentity(false, false, "persistent")).toBe(
-      false,
-    );
+describe("isHostAmbiguous", () => {
+  it("treats a lone persistent machine as unambiguous", () => {
+    expect(isHostAmbiguous(false, "persistent")).toBe(false);
+  });
+
+  it("treats more than one persistent machine as ambiguous", () => {
+    expect(isHostAmbiguous(true, "persistent")).toBe(true);
+  });
+
+  it("treats a machine that is not persistent as ambiguous", () => {
+    expect(isHostAmbiguous(false, "ephemeral")).toBe(true);
+    expect(isHostAmbiguous(false, null)).toBe(true);
   });
 });
 
@@ -91,7 +95,6 @@ function makeDisplay(
   return {
     modeLabel: "Working locally",
     compactModeLabel: "Local",
-    typeLabel: "Local",
     providerLabel: null,
     lifecycle: null,
     id: "env_test",
@@ -116,30 +119,24 @@ const containerProviderLookup = findEnvironmentDisplayProvider(
 interface SummaryDisplayOverrides {
   display?: EnvironmentDisplayInfo;
   providerLookup?: ReturnType<typeof findEnvironmentDisplayProvider>;
-  environmentName?: string | null;
   hasMultipleMachines?: boolean;
   hostName?: string | null;
   hostType?: Host["type"] | null;
-  isProjectless?: boolean;
 }
 
 function getSummaryDisplay({
   display = makeDisplay(),
   providerLookup = noProviderLookup,
-  environmentName = null,
   hasMultipleMachines = false,
   hostName = "Michael-M4",
   hostType = "persistent",
-  isProjectless = false,
 }: SummaryDisplayOverrides = {}) {
   return getEnvironmentWorkspaceSummaryDisplay({
     display,
     providerLookup,
-    environmentName,
     hasMultipleMachines,
     hostName,
     hostType,
-    isProjectless,
   });
 }
 
@@ -193,9 +190,6 @@ describe("getEnvironmentDisplayIconName", () => {
 
 describe("getEnvironmentWorkspaceSummaryDisplay", () => {
   it("retains the current sandbox identity when persistent machine choices are singular", () => {
-    expect(shouldShowEnvironmentHostIdentity(false, false, "ephemeral")).toBe(
-      true,
-    );
     expect(
       getSummaryDisplay({
         providerLookup: worktreeProviderLookup,
@@ -218,7 +212,6 @@ describe("getEnvironmentWorkspaceSummaryDisplay", () => {
           compactModeLabel: "Provisioning",
           lifecycle: "provisioning",
           providerLabel: "Worktree",
-          typeLabel: "Worktree · Local",
         }),
         providerLookup: worktreeProviderLookup,
         hasMultipleMachines: true,
@@ -227,7 +220,7 @@ describe("getEnvironmentWorkspaceSummaryDisplay", () => {
       label: "Provisioning",
       compactLabel: "Provisioning",
       icon: "Loading",
-      typeLabel: undefined,
+      providerName: null,
     });
   });
 
@@ -235,77 +228,94 @@ describe("getEnvironmentWorkspaceSummaryDisplay", () => {
     expect(
       getSummaryDisplay({
         display: makeDisplay({
-          modeLabel: "Destroyed",
-          compactModeLabel: "Destroyed",
+          modeLabel: "Environment unavailable",
+          compactModeLabel: "Environment unavailable",
           lifecycle: "destroyed",
         }),
         providerLookup: worktreeProviderLookup,
         hasMultipleMachines: true,
       }),
-    ).toMatchObject({ label: "Destroyed", compactLabel: "Destroyed" });
+    ).toMatchObject({ label: "Environment unavailable", compactLabel: "Environment unavailable" });
   });
-
   it.each([
     {
       name: "a local project checkout",
       display: makeDisplay(),
-      providerLookup: noProviderLookup,
     },
     {
       name: "a remote project checkout",
       display: makeDisplay({
         modeLabel: "Working remotely",
         compactModeLabel: "Remote",
-        typeLabel: "Remote",
       }),
-      providerLookup: noProviderLookup,
     },
+  ])("shows nothing for $name with no environment provider", (testCase) => {
+    expect(
+      getSummaryDisplay({
+        display: testCase.display,
+        providerLookup: noProviderLookup,
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
     {
       name: "a worktree",
       display: makeDisplay({
         modeLabel: "Worktree",
         compactModeLabel: "Worktree",
-        typeLabel: "Worktree · Local",
         providerLabel: "Worktree",
       }),
       providerLookup: worktreeProviderLookup,
+      label: "Worktree",
     },
     {
       name: "a personal workspace",
       display: makeDisplay({
         modeLabel: "Personal workspace",
         compactModeLabel: "Personal workspace",
-        typeLabel: "Personal workspace · Local",
         providerLabel: "Personal workspace",
       }),
       providerLookup: personalProviderLookup,
+      label: "Personal workspace",
     },
-  ])("shows nothing for $name on a single machine", (testCase) => {
+  ])("names $name by its provider on a single machine", (testCase) => {
     expect(
       getSummaryDisplay({
         display: testCase.display,
         providerLookup: testCase.providerLookup,
       }),
-    ).toBeNull();
+    ).toMatchObject({
+      label: testCase.label,
+      compactLabel: testCase.label,
+    });
   });
 
-  it("shows the machine for a single-machine projectless thread", () => {
+  it("names a projectless thread by its provider on a lone persistent machine", () => {
+    expect(
+      getSummaryDisplay({ providerLookup: personalProviderLookup }),
+    ).toMatchObject({
+      label: "Personal workspace",
+      compactLabel: "Personal workspace",
+    });
+  });
+
+  it("shows the machine for a projectless thread once a second machine exists", () => {
     expect(
       getSummaryDisplay({
         providerLookup: personalProviderLookup,
-        isProjectless: true,
+        hasMultipleMachines: true,
       }),
     ).toMatchObject({ label: "Michael-M4", compactLabel: "Michael-M4" });
   });
 
-  it("omits an unnamed single-machine environment with an unregistered provider", () => {
+  it("marks an unregistered provider as not installed on a single machine", () => {
     expect(
       getSummaryDisplay({
         providerLookup: findEnvironmentDisplayProvider([], "retired-cloud"),
       }),
-    ).toBeNull();
+    ).toMatchObject({ label: "retired-cloud (not installed)" });
   });
-
   it.each([
     { name: "project checkout", providerLookup: noProviderLookup },
     { name: "git-worktree", providerLookup: worktreeProviderLookup },
@@ -332,7 +342,7 @@ describe("getEnvironmentWorkspaceSummaryDisplay", () => {
     ).toBeNull();
   });
 
-  it("keeps an explicit environment name when multiple machines exist", () => {
+  it("uses the machine when an environment has a custom name", () => {
     expect(
       getSummaryDisplay({
         display: makeDisplay({
@@ -340,13 +350,24 @@ describe("getEnvironmentWorkspaceSummaryDisplay", () => {
           compactModeLabel: "Design system polish",
         }),
         providerLookup: worktreeProviderLookup,
-        environmentName: "Design system polish",
         hasMultipleMachines: true,
       }),
     ).toMatchObject({
-      label: "Design system polish",
-      compactLabel: "Design system polish",
+      label: "Michael-M4",
+      compactLabel: "Michael-M4",
     });
+  });
+
+  it("uses the provider on one machine when an environment has a custom name", () => {
+    expect(
+      getSummaryDisplay({
+        display: makeDisplay({
+          modeLabel: "Design system polish",
+          compactModeLabel: "Design system polish",
+        }),
+        providerLookup: worktreeProviderLookup,
+      }),
+    ).toMatchObject({ label: "Worktree", compactLabel: "Worktree" });
   });
 });
 
@@ -354,10 +375,14 @@ describe("getEnvironmentWorkspaceInfoDisplay", () => {
   it("shows the environment label and machine for a provider that runs on one", () => {
     expect(
       getEnvironmentWorkspaceInfoDisplay({
-        display: makeDisplay({ providerLabel: "Worktree" }),
+        display: makeDisplay({
+          modeLabel: "Design system polish",
+          compactModeLabel: "Design system polish",
+          providerLabel: "Worktree",
+        }),
         providerLookup: worktreeProviderLookup,
-        environmentName: null,
         hostName: "Michael-M4",
+        locality: "local",
       }),
     ).toEqual({
       label: "Worktree",
@@ -371,12 +396,26 @@ describe("getEnvironmentWorkspaceInfoDisplay", () => {
       getEnvironmentWorkspaceInfoDisplay({
         display: makeDisplay({ compactModeLabel: "retired-cloud" }),
         providerLookup: findEnvironmentDisplayProvider([], "retired-cloud"),
-        environmentName: null,
         hostName: "Michael-M4",
+        locality: "local",
       }),
     ).toMatchObject({
       label: "retired-cloud (not installed)",
       machineName: "Michael-M4",
     });
+  });
+
+  it("uses locality for a named environment without a provider", () => {
+    expect(
+      getEnvironmentWorkspaceInfoDisplay({
+        display: makeDisplay({
+          modeLabel: "Design system polish",
+          compactModeLabel: "Design system polish",
+        }),
+        providerLookup: noProviderLookup,
+        hostName: "Michael-M4",
+        locality: "local",
+      }),
+    ).toMatchObject({ label: "Local", machineName: "Michael-M4" });
   });
 });

@@ -296,10 +296,10 @@ const ACTION_BUTTON_CLASS =
 const HOVER_REVEAL_CLASS =
   "opacity-0 transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100";
 const MOBILE_INLINE_ACTION_CLASS =
-  "max-md:pointer-coarse:size-7 max-md:pointer-coarse:opacity-100 max-md:pointer-coarse:disabled:opacity-40 max-md:pointer-coarse:[&_svg]:size-4";
+  "max-md:pointer-coarse:size-7 max-md:pointer-coarse:opacity-100 max-md:pointer-coarse:disabled:opacity-40 max-md:pointer-coarse:[&_[data-icon-root]]:size-4";
 const MOBILE_OVERFLOW_ACTION_CLASS = "max-md:pointer-coarse:hidden";
 const MOBILE_OVERFLOW_TRIGGER_CLASS =
-  "hidden size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:text-foreground data-[state=open]:bg-state-active data-[state=open]:text-foreground max-md:pointer-coarse:inline-flex max-md:pointer-coarse:[&_svg]:size-4";
+  "hidden size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:text-foreground data-[state=open]:bg-state-active data-[state=open]:text-foreground max-md:pointer-coarse:inline-flex max-md:pointer-coarse:[&_[data-icon-root]]:size-4";
 const ACTION_TOOLTIP_SIDE = "bottom";
 const MENU_CONTENT_WIDTH_CLASS = "max-w-[min(16rem,calc(100vw-1rem))]";
 const MOBILE_OVERFLOW_CONTENT_CLASS =
@@ -308,7 +308,7 @@ const MOBILE_OVERFLOW_ITEM_CLASS =
   "flex min-h-8 w-full cursor-pointer items-center gap-2 rounded px-2 py-1 text-left text-xs text-foreground transition-colors hover:bg-surface-recessed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring active:bg-state-active disabled:pointer-events-none disabled:opacity-40 select-none";
 
 const ACTION_ROW_CLASS =
-  "absolute top-0 flex max-w-full items-center gap-2 overflow-hidden has-[[data-state=open]]:[&_button]:opacity-100";
+  "absolute top-0 flex max-w-full items-center gap-2 overflow-hidden data-[menu-open]:[&_button]:opacity-100";
 const ACTION_ROW_EXPANDED_CLASS = "absolute top-0 z-10 flex items-center gap-2";
 
 const BUBBLE_ALIGN_INSET_CLASS = "pr-[13px] max-md:pointer-coarse:pr-[11px]";
@@ -422,6 +422,7 @@ export function MessageActionBar({
         : sharedColumnWidth.width -
           (alignment === "start" ? PROSE_COLUMN_INSET_PX : 0);
   const [expanded, setExpanded] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const expandedRowRef = useRef<HTMLDivElement | null>(null);
   const slotRef = useCallback(
     (node: HTMLDivElement | null) => {
@@ -639,7 +640,10 @@ export function MessageActionBar({
         ref={desktopSlotRef}
         className={cn(slotClass, "h-5 max-md:pointer-coarse:h-7")}
       >
-        <div className={rowClass}>
+        <div
+          className={rowClass}
+          data-menu-open={isMenuOpen ? "" : undefined}
+        >
           {actions.slice(0, layout.inlineCount).map((action) => (
             <DesktopMessageAction
               key={action.key ?? action.label}
@@ -649,7 +653,7 @@ export function MessageActionBar({
             />
           ))}
           {layout.overflowCount > 0 ? (
-            <DropdownMenu>
+            <DropdownMenu onOpenChange={setIsMenuOpen}>
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
@@ -677,7 +681,7 @@ export function MessageActionBar({
             </DropdownMenu>
           ) : null}
           {mobileActionDisplay === "overflow" ? (
-            <DropdownMenu>
+            <DropdownMenu onOpenChange={setIsMenuOpen}>
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionState } from "../session/session-scheduler";
 import {
+  resolveShellLoadPath,
   resolveShellScreenState,
   shouldReloadForSession,
   type ShellLoadPhase,
@@ -47,7 +48,7 @@ describe("resolveShellScreenState", () => {
         session: IDLE,
         load: READY,
       }),
-    ).toEqual({ kind: "webview" });
+    ).toEqual({ kind: "webview", serverErrorStatus: null });
   });
 
   it("asks for re-pairing when the gate rejected the credential", () => {
@@ -92,16 +93,15 @@ describe("resolveShellScreenState", () => {
     });
   });
 
-  it("reports an error status from the server", () => {
-    const state = resolveShellScreenState({
-      ...BASE,
-      hasProfile: true,
-      session: AUTHENTICATED,
-      load: { kind: "http-error", status: 502 },
-    });
-    expect(state.kind).toBe("error");
-    if (state.kind !== "error") throw new Error("unreachable");
-    expect(state.detail).toBe("HTTP 502");
+  it("shows the server's own error page instead of replacing it", () => {
+    expect(
+      resolveShellScreenState({
+        ...BASE,
+        hasProfile: true,
+        session: AUTHENTICATED,
+        load: { kind: "http-error", status: 503 },
+      }),
+    ).toEqual({ kind: "webview", serverErrorStatus: 503 });
   });
 
   it("keeps the WebView mounted while a load is in flight", () => {
@@ -112,7 +112,7 @@ describe("resolveShellScreenState", () => {
         session: AUTHENTICATED,
         load: { kind: "loading" },
       }),
-    ).toEqual({ kind: "webview" });
+    ).toEqual({ kind: "webview", serverErrorStatus: null });
   });
 
   it("waits for the profile and for the first session mint", () => {
@@ -132,6 +132,35 @@ describe("resolveShellScreenState", () => {
         load: { kind: "loading" },
       }).kind,
     ).toBe("loading");
+  });
+});
+
+describe("resolveShellLoadPath", () => {
+  it("reloads the page where the user is, not where it was first opened", () => {
+    expect(
+      resolveShellLoadPath({
+        visitedPath: "/projects/p1/threads/thr_new",
+        requestedPath: "/projects/p1/threads/thr_notified",
+      }),
+    ).toBe("/projects/p1/threads/thr_new");
+  });
+
+  it("opens a requested thread before the page reports where it is", () => {
+    expect(
+      resolveShellLoadPath({
+        visitedPath: null,
+        requestedPath: "/projects/p1/threads/thr_notified",
+      }),
+    ).toBe("/projects/p1/threads/thr_notified");
+  });
+
+  it("opens the new-thread page on a cold start", () => {
+    expect(
+      resolveShellLoadPath({ visitedPath: null, requestedPath: undefined }),
+    ).toBe("/");
+    expect(resolveShellLoadPath({ visitedPath: null, requestedPath: "" })).toBe(
+      "/",
+    );
   });
 });
 

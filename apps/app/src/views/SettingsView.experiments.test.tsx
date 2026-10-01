@@ -14,9 +14,10 @@ function renderSection(
       disabled={false}
       experiments={{
         changelogPreview: false,
+        legacyJitiPluginLoader: false,
         mobileApp: false,
+        serverMove: false,
         sidebarProgressiveDisclosure: false,
-        timelineWindowing: false,
       }}
       onExperimentChange={onExperimentChange}
     />,
@@ -31,6 +32,13 @@ describe("ExperimentsSettingsSection", () => {
     expect(onChange).toHaveBeenCalledWith("changelogPreview", true);
   });
 
+  it("reports legacy plugin loader changes", () => {
+    const onChange = vi.fn();
+    renderSection(onChange);
+    fireEvent.click(screen.getByLabelText("Legacy plugin loader (JITI)"));
+    expect(onChange).toHaveBeenCalledWith("legacyJitiPluginLoader", true);
+  });
+
   it("reports mobile app changes", () => {
     const onChange = vi.fn();
     renderSection(onChange);
@@ -43,12 +51,5 @@ describe("ExperimentsSettingsSection", () => {
     renderSection(onChange);
     fireEvent.click(screen.getByLabelText("Sidebar progressive disclosure"));
     expect(onChange).toHaveBeenCalledWith("sidebarProgressiveDisclosure", true);
-  });
-
-  it("reports timeline windowing changes", () => {
-    const onChange = vi.fn();
-    renderSection(onChange);
-    fireEvent.click(screen.getByLabelText("Timeline windowing"));
-    expect(onChange).toHaveBeenCalledWith("timelineWindowing", true);
   });
 });

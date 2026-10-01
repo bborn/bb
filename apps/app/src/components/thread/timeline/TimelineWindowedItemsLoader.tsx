@@ -1,14 +1,30 @@
-import {
-  createContext,
-  lazy,
-  Suspense,
-  type CSSProperties,
-  type ReactNode,
-} from "react";
+import { createContext, type CSSProperties, type ReactNode } from "react";
+
+import { TimelineWindowedItems } from "./TimelineWindowedItems.js";
 
 export const DEFAULT_WINDOWING_MIN_ITEM_COUNT = 20;
 const MAX_MEASUREMENTS = 2_000;
-export const NOOP_ITEM_REF = () => {};
+const MAX_RETAINED_MEASUREMENT_OWNERS = 16;
+const retainedMeasurements = new Map<string, Map<string, number>>();
+
+export function getRetainedTimelineMeasurements(
+  ownerKey: string,
+): Map<string, number> {
+  const existing = retainedMeasurements.get(ownerKey);
+  if (existing !== undefined) {
+    retainedMeasurements.delete(ownerKey);
+    retainedMeasurements.set(ownerKey, existing);
+    return existing;
+  }
+  const created = new Map<string, number>();
+  retainedMeasurements.set(ownerKey, created);
+  while (retainedMeasurements.size > MAX_RETAINED_MEASUREMENT_OWNERS) {
+    const oldestKey = retainedMeasurements.keys().next().value;
+    if (oldestKey === undefined) break;
+    retainedMeasurements.delete(oldestKey);
+  }
+  return created;
+}
 
 export function recordTimelineMeasurement(
   measurements: Map<string, number>,
@@ -45,7 +61,6 @@ export interface TimelineWindowedItemRenderState {
 }
 
 export interface TimelineWindowedItemsProps {
-  enabled: boolean;
   alwaysMountedKeys?: ReadonlySet<string>;
   estimateItemHeight: (index: number) => number;
   gap: number;
@@ -59,47 +74,6 @@ export interface TimelineWindowedItemsProps {
   ) => ReactNode;
 }
 
-const LazyTimelineWindowedItems = lazy(async () => {
-  const module = await import("./TimelineWindowedItems.js");
-  return { default: module.TimelineWindowedItems };
-});
-
-function TimelineWindowedItemsControl({
-  itemKeys,
-  measurements,
-  renderItem,
-  captureMeasurements = false,
-}: TimelineWindowedItemsProps & { captureMeasurements?: boolean }) {
-  return itemKeys.map((key, index) =>
-    renderItem(index, {
-      isRealized: true,
-      itemIndex: captureMeasurements ? index : undefined,
-      itemRef: captureMeasurements
-        ? (element) => {
-            if (element === null) return;
-            const height = element.getBoundingClientRect().height;
-            if (height <= 0) return;
-            recordTimelineMeasurement(measurements, key, height);
-          }
-        : NOOP_ITEM_REF,
-      itemStyle: undefined,
-      windowingEnabled: false,
-    }),
-  );
-}
-
 export function TimelineWindowedItemsLoader(props: TimelineWindowedItemsProps) {
-  const configured =
-    props.enabled &&
-    props.getScrollElement !== null &&
-    props.itemKeys.length >=
-      (props.minItemCount ?? DEFAULT_WINDOWING_MIN_ITEM_COUNT);
-  if (!configured) return <TimelineWindowedItemsControl {...props} />;
-  return (
-    <Suspense
-      fallback={<TimelineWindowedItemsControl {...props} captureMeasurements />}
-    >
-      <LazyTimelineWindowedItems {...props} />
-    </Suspense>
-  );
+  return <TimelineWindowedItems {...props} />;
 }

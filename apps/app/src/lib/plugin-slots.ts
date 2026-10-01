@@ -9,7 +9,6 @@ import type {
   PluginPendingInteractionRegistration,
   PluginFileOpenerRegistration,
   PluginHomepageSectionRegistration,
-  PluginCommandPaletteActionRegistration,
   PluginMessageActionRegistration,
   PluginMessageDirectiveRegistration,
   PluginNavPanelRegistration,
@@ -18,13 +17,16 @@ import type {
   PluginSettingsSectionRegistration,
   PluginSidebarFooterActionRegistration,
   ExperimentalSidebarNavigationRegistration,
+  ExperimentalSidebarHeaderRegistration,
   PluginSourceCodeRendererRegistration,
   PluginThreadHeaderActionRegistration,
+  ExperimentalPluginBrowserToolbarActionRegistration,
   PluginThreadListRegistration,
   PluginThreadPanelActionRegistration,
   PluginTimelineRendererRegistration,
 } from "@get-bb/plugin-sdk";
 import {
+  type CollectedPluginCommandRegistration,
   adaptSidebarFooterAction,
   getCollectedSidebarFooterItems,
   type CollectedPluginProviderIconRegistration,
@@ -45,14 +47,16 @@ export interface PluginRegistrationSet {
   sidebarFooterActions: readonly PluginSidebarFooterActionRegistration[];
   experimentalSidebarFooterItems?: readonly CollectedExperimentalSidebarFooterItem[];
   experimentalSidebarNavigations?: readonly ExperimentalSidebarNavigationRegistration[];
+  experimentalSidebarHeaders?: readonly ExperimentalSidebarHeaderRegistration[];
   threadLists?: readonly PluginThreadListRegistration[];
   threadHeaderActions?: readonly PluginThreadHeaderActionRegistration[];
+  browserToolbarActions?: readonly ExperimentalPluginBrowserToolbarActionRegistration[];
   fileOpeners: readonly PluginFileOpenerRegistration[];
   sourceCodeRenderers?: readonly PluginSourceCodeRendererRegistration[];
   diffRenderers?: readonly PluginDiffRendererRegistration[];
   messageDirectives: readonly PluginMessageDirectiveRegistration[];
   messageActions?: readonly PluginMessageActionRegistration[];
-  commandPaletteActions?: readonly PluginCommandPaletteActionRegistration[];
+  commandPaletteActions?: readonly CollectedPluginCommandRegistration[];
   providerIcons?: readonly CollectedPluginProviderIconRegistration[];
   icons?: readonly ExperimentalIconRegistration[];
   timelineRenderers?: readonly PluginTimelineRendererRegistration[];
@@ -85,10 +89,14 @@ export type PluginSidebarFooterItemSlot = CollectedSidebarFooterItem &
   PluginSlotBase;
 export interface ExperimentalSidebarNavigationSlot
   extends ExperimentalSidebarNavigationRegistration, PluginSlotBase {}
+export interface ExperimentalSidebarHeaderSlot
+  extends ExperimentalSidebarHeaderRegistration, PluginSlotBase {}
 export interface PluginThreadListSlot
   extends PluginThreadListRegistration, PluginSlotBase {}
 interface PluginThreadHeaderActionSlot
   extends PluginThreadHeaderActionRegistration, PluginSlotBase {}
+export interface PluginBrowserToolbarActionSlot
+  extends ExperimentalPluginBrowserToolbarActionRegistration, PluginSlotBase {}
 export interface PluginFileOpenerSlot
   extends PluginFileOpenerRegistration, PluginSlotBase {}
 export interface PluginSourceCodeRendererSlot
@@ -100,7 +108,7 @@ export interface PluginMessageDirectiveSlot
 export interface PluginMessageActionSlot
   extends PluginMessageActionRegistration, PluginSlotBase {}
 export interface PluginCommandPaletteActionSlot
-  extends PluginCommandPaletteActionRegistration, PluginSlotBase {}
+  extends CollectedPluginCommandRegistration, PluginSlotBase {}
 interface PluginIconSlot extends ExperimentalIconRegistration, PluginSlotBase {}
 interface PluginProviderIconSlot
   extends CollectedPluginProviderIconRegistration, PluginSlotBase {}
@@ -122,8 +130,10 @@ export interface PluginSlotSnapshot {
   pendingInteractions: readonly PluginPendingInteractionSlot[];
   sidebarFooterItems: readonly PluginSidebarFooterItemSlot[];
   experimentalSidebarNavigations: readonly ExperimentalSidebarNavigationSlot[];
+  experimentalSidebarHeaders: readonly ExperimentalSidebarHeaderSlot[];
   threadLists: readonly PluginThreadListSlot[];
   threadHeaderActions: readonly PluginThreadHeaderActionSlot[];
+  browserToolbarActions: readonly PluginBrowserToolbarActionSlot[];
   fileOpeners: readonly PluginFileOpenerSlot[];
   sourceCodeRenderers: readonly PluginSourceCodeRendererSlot[];
   diffRenderers: readonly PluginDiffRendererSlot[];
@@ -148,8 +158,10 @@ export const EMPTY_PLUGIN_SLOT_SNAPSHOT: PluginSlotSnapshot = {
   pendingInteractions: [],
   sidebarFooterItems: [],
   experimentalSidebarNavigations: [],
+  experimentalSidebarHeaders: [],
   threadLists: [],
   threadHeaderActions: [],
+  browserToolbarActions: [],
   fileOpeners: [],
   sourceCodeRenderers: [],
   diffRenderers: [],
@@ -181,8 +193,10 @@ const SLOT_KINDS: readonly SlotKind[] = [
   "pendingInteractions",
   "sidebarFooterItems",
   "experimentalSidebarNavigations",
+  "experimentalSidebarHeaders",
   "threadLists",
   "threadHeaderActions",
+  "browserToolbarActions",
   "fileOpeners",
   "sourceCodeRenderers",
   "diffRenderers",
@@ -238,8 +252,10 @@ function flattenRegistrations(
     pendingInteractions: stamp(set.pendingInteractions),
     sidebarFooterItems: stamp<CollectedSidebarFooterItem>(sidebarFooterItems),
     experimentalSidebarNavigations: stamp(set.experimentalSidebarNavigations),
+    experimentalSidebarHeaders: stamp(set.experimentalSidebarHeaders),
     threadLists: stamp(set.threadLists),
     threadHeaderActions: stamp(set.threadHeaderActions),
+    browserToolbarActions: stamp(set.browserToolbarActions),
     fileOpeners: stamp(set.fileOpeners),
     sourceCodeRenderers: stamp(set.sourceCodeRenderers),
     diffRenderers: stamp(set.diffRenderers),

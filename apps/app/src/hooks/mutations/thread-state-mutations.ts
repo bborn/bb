@@ -32,6 +32,7 @@ import {
   settleArchiveThreadsTransaction,
   settleDeleteThreadTransaction,
   settleThreadListMembershipMutation,
+  settleThreadReadStateTransaction,
   type ArchiveThreadsTransaction,
   type DeleteThreadTransaction,
   type PinnedThreadOrderTransaction,
@@ -57,10 +58,18 @@ interface MoveThreadToSectionRequest {
 interface UpdateThreadMutationOptions {
   errorMessage?: string | undefined;
   lifecycleOperation?: LifecycleErrorOperation | undefined;
+  showErrorToast?: boolean;
 }
 
 interface ArchiveThreadAndChildrenMutationRequest {
   id: string;
+  childThreadsConfirmed: boolean;
+}
+
+export class ArchiveThreadConfirmationRequired extends Error {
+  constructor(readonly childThreadCount: number) {
+    super("Archiving child threads requires confirmation");
+  }
 }
 
 interface DeleteThreadMutationRequest {
@@ -84,6 +93,7 @@ export function useUpdateThread(options?: UpdateThreadMutationOptions) {
   >({
     meta: {
       errorMessage: options?.errorMessage ?? "Failed to update thread.",
+      showErrorToast: options?.showErrorToast ?? true,
       ...(options?.lifecycleOperation
         ? { lifecycleOperation: options.lifecycleOperation }
         : {}),
@@ -292,10 +302,20 @@ export function useArchiveThreadAndChildren() {
       lifecycleOperation: "archive_thread",
       showErrorToast: false,
     },
-    mutationFn: ({
+    mutationFn: async ({
       id,
-    }: ArchiveThreadAndChildrenMutationRequest): Promise<ThreadArchiveAllResponse> =>
-      sdk.threads.archiveAll({ threadId: id }),
+      childThreadsConfirmed,
+    }: ArchiveThreadAndChildrenMutationRequest): Promise<ThreadArchiveAllResponse> => {
+      if (!childThreadsConfirmed) {
+        const summary = await sdk.threads.childSummary({ threadId: id });
+        if (summary.unarchivedDescendantCount > 0) {
+          throw new ArchiveThreadConfirmationRequired(
+            summary.unarchivedDescendantCount,
+          );
+        }
+      }
+      return sdk.threads.archiveAll({ threadId: id });
+    },
     onMutate: async ({ id }): Promise<ArchiveThreadsTransaction> =>
       beginArchiveThreadAndChildrenTransaction({
         queryClient,
@@ -318,6 +338,7 @@ export function useUnarchiveThread() {
   const queryClient = useQueryClient();
 
   return useMutation({
+    mutationKey: ["unarchive-thread"],
     meta: {
       errorMessage: "Failed to unarchive thread.",
     },
@@ -338,6 +359,21 @@ export function useUnarchiveThread() {
         queryClient,
         threadId: variables.id,
       });
+    },
+  });
+}
+
+export function useRestoreThreadEnvironment() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    meta: {
+      errorMessage: "Failed to restore workspace.",
+    },
+    mutationFn: ({ id }: ThreadMutationRequest): Promise<ThreadResponse> =>
+      sdk.threads.restoreEnvironment({ threadId: id }),
+    onSuccess: (thread) => {
+      applyThreadUpdateResult({ queryClient, thread });
     },
   });
 }
@@ -399,6 +435,9 @@ export function useMarkThreadRead() {
     onSuccess: (thread) => {
       applyThreadReadStateResult({ queryClient, thread });
     },
+    onSettled: (_data, _error, _input, transaction) => {
+      settleThreadReadStateTransaction({ queryClient, transaction });
+    },
   });
 }
 
@@ -412,7 +451,7 @@ export function useMarkThreadUnread() {
     },
     mutationFn: (input: ThreadReadMutationInput) =>
       sdk.threads.markUnread(input),
-    onMutate: (input): Promise<ThreadListMutationTransaction> =>
+    onMutate: (input): Promise<ThreadReadStateTransaction> =>
       beginThreadReadStateTransaction({
         lastReadAt: null,
         queryClient,
@@ -427,6 +466,9 @@ export function useMarkThreadUnread() {
     },
     onSuccess: (thread) => {
       applyThreadReadStateResult({ queryClient, thread });
+    },
+    onSettled: (_data, _error, _input, transaction) => {
+      settleThreadReadStateTransaction({ queryClient, transaction });
     },
   });
 }

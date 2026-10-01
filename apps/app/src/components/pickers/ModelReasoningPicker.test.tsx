@@ -389,6 +389,7 @@ describe("ModelReasoningPicker", () => {
       modelLoadError: {
         providerId: "codex",
         code: "provider_unavailable",
+        detail: null,
       },
     });
 
@@ -397,9 +398,68 @@ describe("ModelReasoningPicker", () => {
     );
 
     expect(screen.getByTitle("Codex")).not.toBeNull();
+    expect(screen.getByText("Could not load models for Codex.")).not.toBeNull();
+    expect(screen.getByText("Provider plugin failed to load")).not.toBeNull();
+  });
+
+  it("names the missing CLI in one short line and links it to the install page", () => {
+    renderPicker({
+      modelOptions: [],
+      modelValue: "",
+      pickerReasoningOptions: [],
+      pickerProviderOptions: [
+        {
+          value: "codex",
+          label: "Codex",
+          brandPrefix: "GPT-",
+          installUrl: "https://developers.openai.com/codex/cli",
+        },
+        { value: "claude-code", label: "Claude Code", brandPrefix: "Claude " },
+      ],
+      modelLoadError: {
+        providerId: "codex",
+        code: "missing_executable",
+        detail:
+          "bb could not find the Codex CLI on this machine. Install Codex (https://developers.openai.com/codex/cli) or put `codex` on PATH, then retry.",
+      },
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Provider, model and reasoning" }),
+    );
+
+    expect(screen.getByText("Could not load models for Codex.")).not.toBeNull();
+    const reason = screen.getByText("CLI not found");
+    expect(reason.tagName).toBe("A");
+    expect(reason.getAttribute("href")).toBe(
+      "https://developers.openai.com/codex/cli",
+    );
+    expect(screen.queryByText(/put `codex` on PATH/)).toBeNull();
+  });
+
+  it("shows the underlying failure detail beneath a generic model-load error", () => {
+    renderPicker({
+      modelOptions: [],
+      modelValue: "",
+      pickerReasoningOptions: [],
+      modelLoadError: {
+        providerId: "codex",
+        code: "failed",
+        detail: "bb could not find the Codex CLI on this machine.",
+      },
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Provider, model and reasoning" }),
+    );
+
+    expect(screen.getByText("Could not load models for Codex.")).not.toBeNull();
     expect(
-      screen.getByText(
-        "Codex is unavailable because its provider plugin failed to load.",
+      screen.getByText("bb could not find the Codex CLI on this machine."),
+    ).not.toBeNull();
+    expect(
+      screen.getByTitle(
+        "Could not load models for Codex. bb could not find the Codex CLI on this machine.",
       ),
     ).not.toBeNull();
   });
@@ -671,63 +731,37 @@ describe("ModelReasoningPicker", () => {
     expect(onModelChange).toHaveBeenCalledWith("claude-opus-4-7");
   });
 
-  it("opens the same handoff flow from provider tabs and the footer", async () => {
+  it("can hand off within the source provider and exit the picker mode", () => {
     const onSelect = vi.fn();
-    const { onSelectedProviderChange, onModelChange, onReasoningChange } =
-      renderPicker({ handoff: { sourceProviderId: "codex", onSelect } });
-    const trigger = screen.getByRole("button", {
-      name: "Provider, model and reasoning",
+    const onExit = vi.fn();
+    const onStart = vi.fn();
+    const { onModelChange } = renderPicker({
+      pickerProviderOptions: providerOptions.filter(
+        (provider) => provider.value === "codex",
+      ),
+      handoff: {
+        sourceProviderId: "codex",
+        active: false,
+        onStart,
+        onExit,
+        onSelect,
+      },
     });
-
-    fireEvent.click(trigger);
-    fireEvent.click(screen.getByTitle("Claude Code"));
-
-    expect(
-      screen.getByRole("button", { name: "Back to model picker" }),
-    ).not.toBeNull();
-    fireEvent.click(screen.getByTitle("Codex (current thread)"));
-    expect(
-      screen.queryByRole("button", { name: "Back to model picker" }),
-    ).toBeNull();
-    expect(onSelectedProviderChange).not.toHaveBeenCalled();
-
+    fireEvent.click(
+      screen.getByRole("button", { name: "Provider, model and reasoning" }),
+    );
     fireEvent.click(
       screen.getByRole("button", { name: "Handoff to new thread" }),
     );
-    expect(screen.getByTitle("Codex (current thread)")).not.toBeNull();
-    expect(await screen.findByText("Opus 4.7")).not.toBeNull();
-    expect(screen.getAllByText("5.5")).toHaveLength(1);
-    expect(onSelectedProviderChange).not.toHaveBeenCalled();
-    expect(
-      screen.queryByRole("button", { name: "Handoff to new thread" }),
-    ).toBeNull();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Back to model picker" }),
+    expect(onStart).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "5.5" }));
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: "codex" }),
     );
-    expect(
-      screen.queryByRole("button", { name: "Back to model picker" }),
-    ).toBeNull();
-    expect(screen.getByTitle("Codex")).toHaveProperty("disabled", false);
-    expect(screen.getAllByText("5.5")).toHaveLength(2);
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Handoff to new thread" }),
-    );
-    fireEvent.click(await screen.findByText("Opus 4.7"));
-
-    expect(onSelect).toHaveBeenCalledExactlyOnceWith({
-      providerId: "claude-code",
-      model: "claude-opus-4-7",
-      reasoningLevel: "medium",
-    });
-    expect(onSelectedProviderChange).not.toHaveBeenCalled();
     expect(onModelChange).not.toHaveBeenCalled();
-    expect(onReasoningChange).not.toHaveBeenCalled();
-    expect(trigger.getAttribute("aria-expanded")).toBe("true");
-    expect(
-      screen.getByRole("button", { name: "Back to model picker" }),
-    ).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Exit handoff" }));
+    expect(onExit).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Exit handoff" })).toBeNull();
   });
 
   it.each([
@@ -739,7 +773,13 @@ describe("ModelReasoningPicker", () => {
       const onSelect = vi.fn();
       const { onModelChange, onReasoningChange, onSelectedProviderChange } =
         renderPicker({
-          handoff: { sourceProviderId: "codex", onSelect },
+          handoff: {
+            sourceProviderId: "codex",
+            active: false,
+            onStart: vi.fn(),
+            onExit: vi.fn(),
+            onSelect,
+          },
           providerRouting: { environmentId: "env-source" },
           alternateProviderModels: [
             availableModel({
@@ -763,6 +803,7 @@ describe("ModelReasoningPicker", () => {
       fireEvent.click(
         screen.getByRole("button", { name: "Handoff to new thread" }),
       );
+      fireEvent.click(screen.getByTitle("Claude Code"));
       await screen.findByText("Opus 4.7");
       act(() => {
         commandHandlers.get(command)?.({ target: document.body });
@@ -783,7 +824,13 @@ describe("ModelReasoningPicker", () => {
     async (command) => {
       const onSelect = vi.fn();
       const { onModelChange, onReasoningChange } = renderPicker({
-        handoff: { sourceProviderId: "codex", onSelect },
+        handoff: {
+          sourceProviderId: "codex",
+          active: false,
+          onStart: vi.fn(),
+          onExit: vi.fn(),
+          onSelect,
+        },
         alternateProviderModels: [
           {
             ...availableModel({
@@ -804,6 +851,7 @@ describe("ModelReasoningPicker", () => {
       fireEvent.click(
         screen.getByRole("button", { name: "Handoff to new thread" }),
       );
+      fireEvent.click(screen.getByTitle("Claude Code"));
       await screen.findByText("Opus 4.7");
       act(() => {
         commandHandlers.get(command)?.({ target: document.body });
@@ -820,26 +868,30 @@ describe("ModelReasoningPicker", () => {
     },
   );
 
-  it("returns to the thread's provider from the current-thread tab", () => {
+  it("keeps handoff mode when browsing the current provider", () => {
     const onSelect = vi.fn();
+    const onExit = vi.fn();
     const { onSelectedProviderChange } = renderPicker({
       selectedProviderId: "claude-code",
-      handoff: { sourceProviderId: "codex", onSelect },
+      handoff: {
+        sourceProviderId: "codex",
+        active: true,
+        onStart: vi.fn(),
+        onExit,
+        onSelect,
+      },
     });
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Provider, model and reasoning" }),
-    );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Handoff to new thread" }),
-    );
+    const trigger = screen.getByRole("button", {
+      name: "Provider, model and reasoning",
+    });
+    fireEvent.click(trigger);
     fireEvent.click(screen.getByTitle("Codex (current thread)"));
-
-    expect(onSelectedProviderChange).toHaveBeenCalledExactlyOnceWith("codex");
-    expect(onSelect).not.toHaveBeenCalled();
-    expect(
-      screen.queryByRole("button", { name: "Back to model picker" }),
-    ).toBeNull();
+    expect(onExit).not.toHaveBeenCalled();
+    expect(onSelectedProviderChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Exit handoff" })).not.toBeNull();
+    fireEvent.click(trigger);
+    fireEvent.click(trigger);
+    expect(screen.getByRole("button", { name: "Exit handoff" })).not.toBeNull();
   });
 
   it.each([

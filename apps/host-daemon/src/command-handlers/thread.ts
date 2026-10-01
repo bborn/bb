@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { AgentRuntimeBridgeLaunch } from "@bb/agent-runtime";
 import { flattenPromptInputGroups } from "@bb/domain";
-import type { HostDaemonCommandResult } from "@bb/host-daemon-contract";
+import {
+  COMPETING_TURN_ERROR_CODE,
+  type HostDaemonCommandResult,
+} from "@bb/host-daemon-contract";
 import type { RuntimeEntry } from "../runtime-manager.js";
 import {
   CommandDispatchError,
@@ -47,6 +51,18 @@ interface StagedThreadCommandInput {
   input: TurnSubmitCommand["input"];
 }
 
+export async function deleteThreadStorage(
+  command: CommandOf<"thread.storage.delete">,
+  options: CommandDispatchOptions,
+): Promise<void> {
+  const storagePath = requireContainedPath(
+    options.threadStorageRootPath,
+    path.join(options.threadStorageRootPath, command.threadId),
+    "Thread storage path escapes the storage root",
+  );
+  await fs.rm(storagePath, { recursive: true, force: true });
+}
+
 type ThreadStartRuntimeCommand =
   | CommandOf<"thread.start">
   | CommandOf<"thread.rewind.prepare">;
@@ -81,7 +97,7 @@ async function requireSupportedProviderCliForThreadStart({
     command.type === "thread.rewind.prepare"
       ? ("thread_rewind" as const)
       : undefined;
-  await options.refreshShellEnv();
+  await options.refreshShellEnv({ allowStale: true });
   const status = await options.runtimeManager.providerInstallationGate.run(
     providerInstallationGateKey({
       providerId: command.providerId,
@@ -180,6 +196,7 @@ async function resumeThreadRuntimeIfMissing(
   );
   await entry.runtime.resumeThread({
     bridgeLaunch,
+    skillRoots: entry.skillRoots,
     environmentId: command.environmentId,
     threadId: command.threadId,
     projectId: resumeContext.projectId,
@@ -220,6 +237,7 @@ export async function startThread(
     );
     const result = await entry.runtime.startThread({
       bridgeLaunch,
+      skillRoots: entry.skillRoots,
       environmentId: command.environmentId,
       threadId: command.threadId,
       projectId: command.projectId,
@@ -252,6 +270,7 @@ export async function prepareThreadRewind(
   );
   return entry.runtime.prepareThreadRewind({
     bridgeLaunch,
+    skillRoots: entry.skillRoots,
     environmentId: command.environmentId,
     threadId: command.threadId,
     leaseId: command.leaseId,
@@ -391,7 +410,8 @@ async function resolveLiveSubmittedTurnTarget(
     return refreshedTurnId;
   }
   if (entry.runtime.getLiveThreadIds().includes(command.threadId)) {
-    throw new Error(
+    throw new CommandDispatchError(
+      COMPETING_TURN_ERROR_CODE,
       `Refusing to start a competing turn while ${command.threadId} is still starting`,
     );
   }

@@ -321,6 +321,25 @@ export const pluginSettingsUpdateRequestSchema = z
   .object({ values: z.record(z.string(), jsonValueSchema) })
   .strict();
 
+export const pluginSafeModeRequestSchema = z
+  .object({ enabled: z.boolean() })
+  .strict();
+
+export const pluginSafeModeResponseSchema = z.object({
+  enabled: z.boolean(),
+});
+export type PluginSafeModeResponse = z.infer<
+  typeof pluginSafeModeResponseSchema
+>;
+
+export const pluginSafeModeUpdateResponseSchema = z.object({
+  enabled: z.boolean(),
+  problems: z.array(z.string()),
+});
+export type PluginSafeModeUpdateResponse = z.infer<
+  typeof pluginSafeModeUpdateResponseSchema
+>;
+
 export const pluginTokenRequestSchema = z
   .object({ rotate: z.boolean().optional().default(false) })
   .strict();
@@ -530,3 +549,27 @@ export type PluginMarketplaceRefreshResult = z.infer<
 export const pluginMarketplaceRefreshResponseSchema = z.object({
   results: z.array(pluginMarketplaceRefreshResultSchema),
 });
+
+export const pluginRpcDiscoveryQuerySchema = z.object({
+  pluginId: z.string().min(1).optional(),
+  method: z.string().min(1).optional(),
+});
+export type PluginRpcDiscoveryQuery = z.infer<
+  typeof pluginRpcDiscoveryQuerySchema
+>;
+
+export const publishedPluginRpcMethodSchema = z.object({
+  pluginId: z.string().min(1),
+  displayName: z.string().min(1),
+  method: z.string().min(1),
+  registrationDescription: z.string().nullable(),
+  methodDescription: z.string().nullable(),
+  inputSchema: z.record(z.string(), jsonValueSchema),
+  outputSchema: z.record(z.string(), jsonValueSchema),
+});
+export type PublishedPluginRpcMethod = z.infer<
+  typeof publishedPluginRpcMethodSchema
+>;
+export const pluginRpcDiscoveryResponseSchema = z.array(
+  publishedPluginRpcMethodSchema,
+);

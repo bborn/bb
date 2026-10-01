@@ -8,8 +8,7 @@ import {
   insertEvents,
   pruneBackgroundTaskProgressEvents,
   pruneResolvedItemDeltas,
-  pruneThreadEventsBeforeSequence,
-  pruneTokenUsageEventsBeforeSequence,
+  pruneTokenUsageEvents,
   type InsertEventInput,
 } from "../../src/data/events.js";
 import { upsertHost } from "../../src/data/hosts.js";
@@ -177,34 +176,16 @@ describe("thread event rewrite generation", () => {
       rewrite: (db, threadId) => deleteSuffix(db, threadId, 2),
     },
     {
-      name: "a typed prune",
-      seed: (threadId) =>
-        [1, 2, 3].map((sequence) => tokenUsage(threadId, sequence)),
-      noop: (db, threadId) =>
-        pruneThreadEventsBeforeSequence(db, {
-          sequenceCutoff: 3,
-          threadId,
-          types: ["thread/contextWindowUsage/updated"],
-        }),
-      rewrite: (db, threadId) =>
-        pruneThreadEventsBeforeSequence(db, {
-          sequenceCutoff: 2,
-          threadId,
-          types: ["thread/tokenUsage/updated"],
-        }),
-    },
-    {
       name: "a usage prune",
       seed: (threadId) =>
         [1, 2, 3, 4].map((sequence) => tokenUsage(threadId, sequence)),
       noop: (db, threadId) =>
-        pruneTokenUsageEventsBeforeSequence(db, {
-          sequenceCutoff: 1,
+        pruneTokenUsageEvents(db, {
+          afterSequence: 4,
           threadId,
         }),
       rewrite: (db, threadId) =>
-        pruneTokenUsageEventsBeforeSequence(db, {
-          sequenceCutoff: 4,
+        pruneTokenUsageEvents(db, {
           threadId,
         }),
     },

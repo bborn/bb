@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { threadCreateOriginSchema } from "./thread-create-origin.js";
 import { environmentWorkspaceDisplayKindSchema } from "./environment.js";
 import { gitCheckoutRefSchema } from "./git-checkout.js";
 import {
@@ -36,7 +37,6 @@ export type { ThreadOriginKind } from "./thread-origin-kind.js";
 const threadRuntimeDisplayStatusValues = [
   ...threadStatusValues,
   "provisioning",
-  "host-reconnecting",
   "waiting-for-host",
 ] as const;
 const threadRuntimeDisplayStatusSchema = z.enum(
@@ -48,7 +48,6 @@ export type ThreadRuntimeDisplayStatus = z.infer<
 
 export const threadRuntimeStateSchema = z.object({
   displayStatus: threadRuntimeDisplayStatusSchema,
-  hostReconnectGraceExpiresAt: z.number().nullable(),
 });
 export type ThreadRuntimeState = z.infer<typeof threadRuntimeStateSchema>;
 
@@ -336,6 +335,8 @@ export type ThreadPullRequest = z.infer<typeof threadPullRequestSchema>;
 
 export const threadQueuedMessageSchema = z.object({
   id: z.string(),
+  origin: threadCreateOriginSchema.nullable(),
+  originPluginId: z.string().nullable(),
   initiator: z.enum(["user", "agent", "system"]),
   senderThreadId: z.string().nullable(),
   /**
@@ -400,6 +401,7 @@ export const threadSchema = z.object({
   sectionId: z.string().nullable(),
   status: threadStatusSchema,
   parentThreadId: z.string().nullable(),
+  lifecycleOwnerThreadId: z.string().nullable(),
   sourceThreadId: z.string().nullable(),
   originKind: threadOriginKindSchema.nullable(),
   originPluginId: z.string().nullable(),

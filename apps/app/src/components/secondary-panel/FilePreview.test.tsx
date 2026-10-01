@@ -16,6 +16,9 @@ import {
 } from "./FilePreview";
 import { SOURCE_CODE_MAX_LINES } from "@/components/code/source-code-budget";
 import { SecondaryPanelFilePreview } from "./ThreadStorageFilePreview";
+import { CompactViewportOverrideProvider } from "@bb/shared-ui/hooks/use-compact-viewport";
+import { HttpError } from "@/lib/api";
+import { BbHttpError } from "@bb/sdk/browser";
 import {
   PierreWorkerPoolGateContext,
   type PierreWorkerPoolGate,
@@ -542,6 +545,70 @@ describe("FilePreview", () => {
     openSpy.mockRestore();
   });
 
+  it("keeps compact file actions available without crowding the preview controls", async () => {
+    const onRefresh = vi.fn();
+    const onOpenInEditor = vi.fn();
+    const view = render(
+      <CompactViewportOverrideProvider isCompactViewport>
+        <FilePreview
+          path="reports/gallery.html"
+          onRefresh={onRefresh}
+          onOpenInEditor={onOpenInEditor}
+          state={{
+            kind: "html",
+            file: { name: "gallery.html", contents: "<h1>Gallery</h1>" },
+            iframe: {
+              sandbox: "allow-scripts",
+              title: "Gallery",
+              url: "/gallery.html",
+            },
+            lineRange: null,
+          }}
+        />
+      </CompactViewportOverrideProvider>,
+    );
+    expect(screen.getByRole("button", { name: "Preview" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Raw" })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Copy HTML source" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Refresh file" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "File actions" }));
+    const refresh = await screen.findByRole("menuitem", {
+      name: "Refresh file",
+    });
+    expect(
+      screen.getByRole("menuitem", { name: "Copy HTML source" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("menuitem", { name: "Copy file path" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("menuitem", { name: "Open in external browser" }),
+    ).toBeTruthy();
+    expect(view.container.closest('[inert], [aria-hidden="true"]')).toBeNull();
+    fireEvent.click(refresh);
+    expect(onRefresh).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "File actions" }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Open in editor" }),
+    );
+    expect(onOpenInEditor).toHaveBeenCalledWith("reports/gallery.html");
+    fireEvent.click(screen.getByRole("button", { name: "Raw" }));
+    fireEvent.click(screen.getByRole("button", { name: "File actions" }));
+    const wrap = await screen.findByRole("menuitemcheckbox", {
+      name: "Wrap lines",
+    });
+    expect(wrap.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(wrap);
+    fireEvent.click(screen.getByRole("button", { name: "File actions" }));
+    expect(
+      (
+        await screen.findByRole("menuitemcheckbox", { name: "Wrap lines" })
+      ).getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
   it("enlarges the HTML file actions for narrow coarse pointers", () => {
     render(
       <FilePreview
@@ -573,7 +640,9 @@ describe("FilePreview", () => {
         true,
       );
       expect(
-        actionButton.classList.contains("max-md:pointer-coarse:[&_svg]:size-5"),
+        actionButton.classList.contains(
+          "max-md:pointer-coarse:[&_[data-icon-root]]:size-5",
+        ),
       ).toBe(true);
     }
   });
@@ -846,6 +915,124 @@ describe("FilePreview", () => {
     expect(screen.getByRole("cell", { name: "10" })).not.toBeNull();
   });
 
+  it("states the reason a file preview failed", () => {
+    render(
+      <SecondaryPanelFilePreview
+        activePath="docs/huge.bin"
+        error={
+          new HttpError({
+            status: 413,
+            message: "File is too large to preview",
+            code: "file_too_large",
+            body: {
+              code: "file_too_large",
+              message: "File is too large to preview",
+            },
+          })
+        }
+        filePreview={undefined}
+        isLoading={false}
+      />,
+    );
+
+    expect(screen.getByRole("alert").textContent).toBe(
+      "File is too large to preview",
+    );
+  });
+
+  it("states the reason an SDK-sourced file preview failed", () => {
+    render(
+      <SecondaryPanelFilePreview
+        activePath="docs/notes.md"
+        error={
+          new BbHttpError({
+            status: 502,
+            code: "host_unavailable",
+            message: "Host is not connected",
+            body: {
+              code: "host_unavailable",
+              message: "Host is not connected",
+            },
+          })
+        }
+        filePreview={undefined}
+        isLoading={false}
+      />,
+    );
+
+    expect(screen.getByRole("alert").textContent).toBe("Host is not connected");
+  });
+
+  it("keeps the dedicated not-found message for a 404 preview fetch", () => {
+    render(
+      <SecondaryPanelFilePreview
+        activePath="does-not-exist.md"
+        error={new HttpError({ status: 404, message: "Not found" })}
+        filePreview={undefined}
+        isLoading={false}
+      />,
+    );
+
+    expect(screen.getByRole("alert").textContent).toBe("File not found.");
+  });
+
+  it("keeps the dedicated not-found message for a 404 from the SDK", () => {
+    render(
+      <SecondaryPanelFilePreview
+        activePath="does-not-exist.md"
+        error={
+          new BbHttpError({
+            status: 404,
+            code: "ENOENT",
+            message: "Path does not exist: /workspace/does-not-exist.md",
+            body: {
+              code: "ENOENT",
+              message: "Path does not exist: /workspace/does-not-exist.md",
+            },
+          })
+        }
+        filePreview={undefined}
+        isLoading={false}
+      />,
+    );
+
+    expect(screen.getByRole("alert").textContent).toBe("File not found.");
+  });
+
+  it("falls back to the generic failure message when the error carries none", () => {
+    render(
+      <SecondaryPanelFilePreview
+        activePath="does-not-exist.md"
+        error={new Error("   ")}
+        filePreview={undefined}
+        isLoading={false}
+      />,
+    );
+
+    expect(screen.getByRole("alert").textContent).toBe("Failed to load file");
+  });
+
+  it("does not announce an unsupported preview type as an alert", () => {
+    render(
+      <SecondaryPanelFilePreview
+        activePath="docs/report.pdf"
+        filePreview={{
+          kind: "unsupported",
+          mimeType: "application/pdf",
+          name: "report.pdf",
+          path: "docs/report.pdf",
+          url: "/api/v1/preview/report",
+        }}
+        isLoading={false}
+      />,
+    );
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      screen.getByText("Preview not available for application/pdf."),
+    ).not.toBeNull();
+  });
+
   it("does not show the file preview actions menu for non-text previews", () => {
     render(
       <FilePreview
@@ -895,6 +1082,60 @@ describe("FilePreview", () => {
       expect(pierreMock.state.lastFile?.cacheKey).toBeTruthy();
       expect(pierreMock.state.lastFile?.cacheKey).not.toBe(firstCacheKey);
     });
+  });
+
+  it("tracks preview loading across view changes, document revisions, and URLs", () => {
+    vi.useFakeTimers();
+    const preview = (revision: string, url = "/gallery.html") => (
+      <FilePreview
+        path="gallery.html"
+        state={{
+          kind: "html",
+          file: {
+            name: "gallery.html",
+            contents: "<h1>Gallery</h1>",
+            cacheKey: revision,
+          },
+          iframe: { sandbox: "allow-scripts", title: "Gallery", url },
+          lineRange: null,
+        }}
+      />
+    );
+    const view = render(
+      <FilePreview
+        path="gallery.html"
+        state={{ kind: "loading" }}
+        isRefreshing
+        onRefresh={() => {}}
+      />,
+    );
+    expect(screen.queryByRole("status")).toBeNull();
+    act(() => vi.advanceTimersByTime(200));
+    const loadingStatus = screen.getByRole("status");
+    expect(loadingStatus.textContent).toBe("Loading preview…");
+    view.rerender(preview("first"));
+    expect(screen.getByRole("status")).toBe(loadingStatus);
+    const frame = screen.getByTitle("Gallery");
+    fireEvent.click(screen.getByRole("button", { name: "Raw" }));
+    expect(screen.queryByRole("status")).toBeNull();
+    fireEvent.load(frame);
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    act(() => vi.advanceTimersByTime(200));
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByTitle("Gallery")).toBe(frame);
+
+    view.rerender(preview("second"));
+    act(() => vi.advanceTimersByTime(200));
+    expect(screen.getByRole("status")).toBeTruthy();
+    fireEvent.load(screen.getByTitle("Gallery"));
+    expect(screen.queryByRole("status")).toBeNull();
+
+    view.rerender(preview("second", "/gallery.html?retry=1"));
+    act(() => vi.advanceTimersByTime(200));
+    expect(screen.getByRole("status")).toBeTruthy();
+    fireEvent.load(screen.getByTitle("Gallery"));
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("reloads an HTML iframe only when the fetched source changes", () => {

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { completedTurnDisplaySchema } from "./completed-turn-display.js";
 import { isValidGitBranchName } from "./git-checkout.js";
 
 export const MANAGED_BRANCH_PREFIX_MAX_LENGTH = 64;
@@ -19,7 +20,13 @@ export const appSettingsSchema = z
     showDiagnosticEvents: z.boolean(),
     providerOrder: z.array(z.string().min(1)),
     defaultProviderId: z.string().min(1).nullable(),
+    providerCompletedTurnDisplay: z.record(
+      z.string().min(1),
+      completedTurnDisplaySchema,
+    ),
     streamerMode: z.boolean(),
+    allowFastServiceTier: z.boolean(),
+    telemetryEnabled: z.boolean(),
     managedBranchPrefix: managedBranchPrefixSchema,
     machineServerUrl: z
       .string()
@@ -45,7 +52,10 @@ export const defaultAppSettings: AppSettings = {
   showDiagnosticEvents: false,
   providerOrder: [],
   defaultProviderId: null,
+  providerCompletedTurnDisplay: {},
   streamerMode: false,
+  allowFastServiceTier: true,
+  telemetryEnabled: true,
   managedBranchPrefix: DEFAULT_MANAGED_BRANCH_PREFIX,
   machineServerUrl: null,
   defaultMachineAccess: null,
@@ -54,9 +64,13 @@ export const defaultAppSettings: AppSettings = {
 
 export const appSettingsUpdateSchema = z.union([
   appSettingsSchema.extend({
+    allowFastServiceTier: z.boolean().optional(),
+    telemetryEnabled: z.boolean().optional(),
     showUnhandledProviderEvents: z.boolean().optional(),
   }),
   appSettingsSchema.omit({ showDiagnosticEvents: true }).extend({
+    allowFastServiceTier: z.boolean().optional(),
+    telemetryEnabled: z.boolean().optional(),
     showUnhandledProviderEvents: z.boolean(),
   }),
 ]);

@@ -25,7 +25,7 @@ command’s `--help` before mutation. Use fresh browser snapshots for controls.
 | --- | --- | --- |
 | Draft editing and persistence | Type multiline text, navigate away/back and reload; repeat with rich editing toggled. | Text and supported formatting survive according to draft scope; Enter/Shift+Enter obey the configured send behavior. |
 | Project, environment, host, branch selection | Change each compose picker before submission, then inspect the created thread and environment. | The actual execution target matches the chips at send time. |
-| Provider, model, reasoning, service tier | Open Provider, model and reasoning; select supported combinations and cycle forward/backward through keyboard actions. | Options reflect the live provider catalog, unsupported combinations are unavailable, and the created session uses the selection. |
+| Provider, model, reasoning, service tier | Open Provider, model and reasoning; select supported combinations and cycle forward/backward through keyboard actions. Turn off Settings → Providers → Allow fast service tier, then reopen the picker and inspect Fast mode. | Options reflect the live provider catalog, unsupported combinations are unavailable, and the created session uses the selection. Fast mode disappears while disallowed and returns when allowed. |
 | Permissions and disabled actions | Change the permission picker and compare with the host ceiling; attempt submission with empty text, an attachment, and unavailable provider. | Submit eligibility and accepted permission mode reflect the real payload and host policy. |
 | File and folder mentions | Type @, search a synthetic file and folder, select each, then modify the file before sending. | Provider-visible context uses the resolved send-time content and correct host path, not stale picker previews. |
 | Thread, section, and plugin mentions | Mention a thread/section and an enabled plugin item (Docs, Tasks, GitHub, or Guide). | Resolved context names the chosen item; unavailable/removed items produce clear feedback. |
@@ -53,3 +53,20 @@ recipe. External writes require a disposable test target and task authorization.
 - Use a distinct workspace filename with no same-named prior attachment for the send-time-content test. Verify the provider tool path as well as response text so an older attachment choice cannot be mistaken for stale workspace resolution. Source: `apps/app/src/hooks/pathMentionSuggestions.ts:15`.
 - For synthetic project fixtures use skill list --project <id> --environment <id>; environment alone defaults project to personal and can return Environment not found. project commands also requires --provider <id>. Source: `apps/cli/src/commands/skill.ts:173`.
 - For headless clipboard setup grant clipboard-read, clipboard-write and clipboard-sanitized-write, then write to clipboard and use real Ctrl+V. Distinguish whole-message Add to chat from selected-text quote coverage. Source: `apps/app/src/components/promptbox/PromptBoxInternal.tsx:1690`.
+
+## Attachment accounting verification
+
+There is no attachment inventory or cleanup command; accounting is server-internal
+and only observable in the isolated QA database (`project_attachments`,
+`project_attachment_threads`, `project_attachment_backfills`) plus the
+`project-attachment-backfill` and `project-attachment-orphan-prune` sweep logs.
+In a disposable project, upload a file through Prompt actions → Attach files and
+schedule the prompt: the upload gets a ready `project_attachments` row and one
+`project_attachment_threads` owner. Cancel the queued message and confirm the
+ownership row survives. Wait for the backfill phase to reach `done`, then age only
+these synthetic rows past the seven-day grace by setting `created_at` backwards and
+let the 60s orphan-prune sweep run: the owned file and row stay, a separate unowned
+upload disappears from the table and from `attachments/<project>/` on disk. Hard-delete
+the synthetic thread and let the sweep run again; that file and row should then be gone
+too. Never age or delete rows in a real user's store. This recipe verifies storage
+ownership without requiring an actual provider turn.

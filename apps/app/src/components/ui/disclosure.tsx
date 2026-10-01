@@ -42,11 +42,11 @@ function Chevron({ className }: ChevronProps) {
       viewBox="0 0 16 16"
       fill="none"
       stroke="currentColor"
-      strokeWidth="0.75"
       strokeLinecap="round"
       strokeLinejoin="round"
-      className={cn("lucide lucide-chevron-right", className)}
+      className={cn("bb-icon-stroke", className)}
       aria-hidden="true"
+      data-icon-root=""
     >
       <path d="M6 4l4 4-4 4" />
     </svg>
@@ -157,6 +157,7 @@ function AnimatedExpandablePanelContent({
       performance.now() + EXPANDABLE_PANEL_TRANSITION_MS;
   }, [isBodyExpanded]);
 
+  const isFirstHeightEffectRef = useRef(true);
   useBrowserLayoutEffect(() => {
     const region = regionRef.current;
     const target = contentRef.current;
@@ -183,9 +184,15 @@ function AnimatedExpandablePanelContent({
       region.style.height = `${heightPx}px`;
     };
 
-    writeHeightSync(readHeightSync(undefined));
+    const canObserveResize = typeof ResizeObserver !== "undefined";
+    if (isFirstHeightEffectRef.current && canObserveResize) {
+      region.style.transitionDuration = "0s";
+    } else {
+      writeHeightSync(readHeightSync(undefined));
+    }
+    isFirstHeightEffectRef.current = false;
 
-    if (typeof ResizeObserver === "undefined") {
+    if (!canObserveResize) {
       return;
     }
 
@@ -193,7 +200,7 @@ function AnimatedExpandablePanelContent({
       read: readHeightSync,
       write: writeHeightSync,
     });
-  }, [collapsedContent, isBodyExpanded, renderedBody]);
+  }, [isBodyExpanded]);
 
   return (
     <div

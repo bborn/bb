@@ -1,5 +1,6 @@
-import type { IconName } from "@bb/shared-ui/icon";
-import type { FollowUpSubmitMode } from "@bb/client-core";
+import { Icon, type IconName } from "@bb/shared-ui/icon";
+import { Button } from "@bb/shared-ui/button";
+import type { FollowUpSubmitMode, PromptDraftState } from "@bb/client-core";
 import {
   memo,
   useCallback,
@@ -163,9 +164,14 @@ export interface FollowUpPromptBoxProps {
   promptActions?: readonly PromptBoxAction[];
   suppressPluginComposerCustomizations?: boolean;
   pluginComposerHost?: PluginComposerHost | null;
+  voiceDraft?: {
+    getCurrent: () => PromptDraftState;
+    setDraft: (draft: PromptDraftState) => void;
+  };
   pluginComposerScope?: PluginComposerScope | null;
   textEffects?: readonly ComposerTextEffectSource[];
   collapseResetKey: string | number;
+  preferExpanded?: boolean;
   focusEndKey?: string | number;
   isPrimaryComposer?: boolean;
   showScrollToBottomButton?: boolean;
@@ -234,9 +240,11 @@ function FollowUpPromptBoxWithComposer({
   promptActions,
   suppressPluginComposerCustomizations,
   pluginComposerHost,
+  voiceDraft,
   pluginComposerScope,
   textEffects,
   collapseResetKey,
+  preferExpanded = false,
   focusEndKey,
   isPrimaryComposer = true,
   showScrollToBottomButton = true,
@@ -245,10 +253,9 @@ function FollowUpPromptBoxWithComposer({
   const submitMode = composer.submitMode;
   const hasPendingInteraction =
     pendingInteraction !== null && pendingInteraction !== undefined;
-  const canQueueFollowUp = submitMode.kind === "queue";
-  const canSubmit = submitMode.kind === "ready" || submitMode.kind === "queue";
-  const isStopping =
-    submitMode.kind === "blocked" && submitMode.reason === "stopping";
+  const isStopping = submitMode.kind === "queue-while-stopping";
+  const canQueueFollowUp = submitMode.kind === "queue" || isStopping;
+  const canSubmit = submitMode.kind === "ready" || canQueueFollowUp;
   const isLoadingExecutionOptions =
     submitMode.kind === "blocked" &&
     submitMode.reason === "loading-execution-options";
@@ -270,8 +277,8 @@ function FollowUpPromptBoxWithComposer({
     layout: composerLayout,
     text: composer.message,
     attachmentCount,
-    isRunning: canStopRuntime,
-    isSubmitting: composer.isFollowUpSubmitting || isStopping,
+    isRunning: canStopRuntime || isStopping,
+    isSubmitting: composer.isFollowUpSubmitting,
   });
   const promptBoxRef = useRef<PromptBoxHandle>(null);
   const paneContext = useOptionalPaneContext();
@@ -280,7 +287,10 @@ function FollowUpPromptBoxWithComposer({
     promptBoxRef.current?.focusEnd();
     return promptBoxRef.current !== null;
   }, []);
-  const voice = usePromptVoice(promptBoxRef);
+  const voice = usePromptVoice(
+    promptBoxRef,
+    voiceDraft ?? pluginComposerHost ?? undefined,
+  );
   const isCompactViewport = useIsCompactViewport();
   const isPointerCoarse = usePointerCoarse();
   const composerInteractionRef = useRef<HTMLDivElement>(null);
@@ -296,8 +306,10 @@ function FollowUpPromptBoxWithComposer({
   >(null);
   const isWidePromptBoxCollapsed =
     widePromptBoxCollapsedFor === collapseResetKey;
+  const isEditorExpanded =
+    isInteractionExpanded || (preferExpanded && !isWidePromptBoxCollapsed);
   const isPromptBoxCompact =
-    isWidePromptBoxCollapsed || (isCompactViewport && !isInteractionExpanded);
+    isWidePromptBoxCollapsed || (isCompactViewport && !isEditorExpanded);
   const compactConfig = useMemo(
     () =>
       isCompactViewport || isWidePromptBoxCollapsed
@@ -595,13 +607,8 @@ function FollowUpPromptBoxWithComposer({
     steerOnPrimarySubmit &&
     (composer.threadRuntimeDisplayStatus === "provisioning" ||
       composer.threadRuntimeDisplayStatus === "starting");
-  const onPrimarySubmit = steerOnPrimarySubmit
-    ? composer.onModifierSubmit
-    : composer.onSubmit;
   const onModifierSubmit = composer.canModifierSubmit
-    ? steerOnPrimarySubmit
-      ? composer.onSubmit
-      : composer.onModifierSubmit
+    ? composer.onModifierSubmit
     : undefined;
   const modifierSubmitHint = (action: "queue" | "steer"): string =>
     onModifierSubmit ? `, ${modifierSubmitShortcutLabel()} to ${action}` : "";
@@ -690,7 +697,7 @@ function FollowUpPromptBoxWithComposer({
       ref={composerInteractionRef}
       className="relative z-20"
       data-follow-up-composer=""
-      data-follow-up-composer-expanded={isInteractionExpanded ? "" : undefined}
+      data-follow-up-composer-expanded={isEditorExpanded ? "" : undefined}
       hidden={hasPendingInteraction}
       onBlurCapture={scheduleCollapseAfterFocusLoss}
       onFocusCapture={handleComposerFocus}
@@ -704,43 +711,42 @@ function FollowUpPromptBoxWithComposer({
         value={composer.message}
         mentionRanges={composer.mentionRanges}
         onChange={composer.onChangeMessage}
-        onSubmit={onPrimarySubmit}
+        onSubmit={composer.onSubmit}
         onEscape={composer.onEscape}
         blurOnPointerSubmit={isCompactViewport && isPointerCoarse}
         textEffects={textEffects}
         onComposerLayoutChange={setComposerLayout}
-        scrollToBottomOnSubmit={
-          submitMode.kind !== "queue" || steerOnPrimarySubmit
-        }
-        scrollToBottomOnModifierSubmit={!steerOnPrimarySubmit}
+        scrollToBottomOnSubmit={submitMode.kind !== "queue"}
         history={composer.history}
         focusEndKey={focusEndKey}
         placeholder={composer.promptPlaceholder}
         containerCompactPlaceholder={composer.compactPromptPlaceholder}
-        heightAnimationKey={isInteractionExpanded ? "expanded" : "compact"}
+        heightAnimationKey={isEditorExpanded ? "expanded" : "compact"}
         mentionMenuPlacement="top"
         submission={{
           label: composer.submitLabel,
           icon: composer.submitIcon,
           onStop: onStopRuntime,
-          isSubmitting: composer.isFollowUpSubmitting || isStopping,
+          isSubmitting: composer.isFollowUpSubmitting,
           disabled:
             !canSubmit ||
             composer.isFollowUpSubmitting ||
             (steerOnPrimarySubmit && !composer.canModifierSubmit),
           onModifierSubmit,
+          swapSubmitActions: steerOnPrimarySubmit,
+          showModifierSubmitAction: submitMode.kind === "queue",
           title: composer.isFollowUpSubmitting
             ? "Submitting..."
             : canSubmit && composer.submitTitle !== undefined
               ? composer.submitTitle
-              : canQueueFollowUp
-                ? steerOnPrimarySubmit
-                  ? isSteeringWhenReady
-                    ? `Steer when ready (Enter)${modifierSubmitHint("queue")}`
-                    : `Steer current run (Enter)${modifierSubmitHint("queue")}`
-                  : `Queue follow-up (Enter)${modifierSubmitHint("steer")}`
-                : isStopping
-                  ? "Stopping run..."
+              : isStopping
+                ? "Queue for after the stop (Enter)"
+                : canQueueFollowUp
+                  ? steerOnPrimarySubmit
+                    ? isSteeringWhenReady
+                      ? `Steer when ready (Enter)${modifierSubmitHint("queue")}`
+                      : `Steer current run (Enter)${modifierSubmitHint("queue")}`
+                    : `Queue follow-up (Enter)${modifierSubmitHint("steer")}`
                   : isLoadingExecutionOptions
                     ? "Loading models..."
                     : isLoadingPendingInteractions
@@ -759,6 +765,29 @@ function FollowUpPromptBoxWithComposer({
         compact={compactConfig}
         editorLayout="thread"
         onCollapse={isCompactViewport ? undefined : collapseWidePromptBox}
+        modeHeader={
+          execution.handoff?.active ? (
+            <div className="flex min-h-7 items-center gap-1.5 text-xs text-subtle-foreground">
+              <Icon
+                name="MessageSquarePlus"
+                className="size-3.5 shrink-0"
+                aria-hidden
+              />
+              <span>Handoff to new thread</span>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="ml-auto size-6 shrink-0 text-subtle-foreground"
+                onClick={execution.handoff.onExit}
+                disabled={executionControlsDisabled}
+                aria-label="Exit handoff"
+              >
+                <Icon name="X" className="size-3" aria-hidden />
+              </Button>
+            </div>
+          ) : null
+        }
         footerStart={footerStart}
       />
       {!isPromptBoxCompact ? (

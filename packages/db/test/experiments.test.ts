@@ -37,9 +37,10 @@ describe("experiments", () => {
       ).toEqual([
         "changelogPreview",
         "futureExperiment",
+        "legacyJitiPluginLoader",
         "mobileApp",
+        "serverMove",
         "sidebarProgressiveDisclosure",
-        "timelineWindowing",
       ]);
     } finally {
       db.$client.close();

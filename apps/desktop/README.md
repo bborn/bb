@@ -6,14 +6,8 @@ lifecycle.
 
 ## Development
 
-From the repo root, the full source dev loop is:
-
-```bash
-pnpm dev:desktop
-```
-
-That starts the source dev server and the Electron shell through
-`scripts/bb-dev-app`. To run only the desktop package task directly:
+From the repo root, run `pnpm dev` in one terminal for the source server and
+live UI updates. In a second terminal, start the Electron shell:
 
 ```bash
 pnpm exec turbo run dev --filter=@bb/desktop
@@ -22,7 +16,7 @@ pnpm exec turbo run dev --filter=@bb/desktop
 The dev script builds `bb-app`, compiles the Electron main/preload files, and
 opens Electron directly. By default it uses the same checkout-scoped
 `~/.bb-dev/<checkout-instance>` data directory and deterministic high ports as
-the main repo dev launcher; it prints the resolved data dir, server URL, and
+`pnpm dev`; it prints the resolved data dir, server URL, and
 Electron user-data dir at startup. It intentionally overwrites inherited
 `BB_DATA_DIR`, `BB_SERVER_PORT`, `BB_SERVER_URL`, and `BB_HOST_DAEMON_PORT` so a
 desktop dev run launched from an existing bb session still targets the current
@@ -52,10 +46,11 @@ Node runtime:
 pnpm exec turbo run start --filter=@bb/desktop
 ```
 
-Electron is pinned to `41.7.0`, the highest stable line verified to rebuild the
-packaged native modules with the current dependency set. Electron 42.2.0 was
-tested, but `better-sqlite3@12.10.0` does not compile against Electron ABI 146.
-Revisit the pin when `better-sqlite3` ships support or prebuilds for that ABI.
+Electron is pinned to `44.3.0`. macOS builds require macOS 13 (Ventura) or
+newer. The bundled `bb-app` runtime uses `better-sqlite3@13.0.3`, whose N-API
+binaries work with Electron without an ABI-specific rebuild. The packaging
+hook opens an in-memory database with Electron before accepting the packaged
+SQLite module; older ABI-specific modules still use the prebuild fallback.
 
 ## Validation
 
@@ -65,6 +60,10 @@ pnpm exec turbo run build --filter=@bb/desktop
 pnpm exec turbo run test --filter=@bb/desktop --filter=bb-app --force
 pnpm exec turbo run dev --filter=@bb/desktop
 ```
+
+The desktop tests include an Electron startup smoke that opens a real window.
+On Linux it runs only when `DISPLAY` is set; on a headless host, wrap the test
+command in `xvfb-run -a`, as CI does.
 
 ## Packaging
 
@@ -365,3 +364,66 @@ writes a PID file so the next launch can reap a stale Electron-owned `bb-app`
 launcher. Hard crashes such as process aborts, segfaults, or kernel-level kills
 cannot run cleanup in the crashing process; the startup PID-file reap is the
 recovery path for those cases.
+
+### Saved servers
+
+Use **bb → Desktop Settings → Server → Add Server…** to save and switch to
+another machine's HTTP(S) bb server URL. **Window → Server** opens the same
+menu. Saved URLs remain in the menu across restarts; adding an existing URL
+selects it without creating a duplicate. **This Mac** on macOS or **This
+Computer** on Linux switches back to the built-in server without removing
+saved entries.
+
+**Set Server URL…** edits the last selected custom server. Clearing its URL removes
+that entry and switches an active custom target to the built-in server. Other
+saved servers and Connect discovery remain available. Existing single-server preferences are
+loaded automatically into the saved list in `<userData>/server-target.json`.
+
+### Server moves
+
+After `bb server move`, the old computer's data dir (`~/.bb` or
+`$BB_DATA_DIR`) contains `server-moved.json`. The desktop app reads it at
+startup, whenever the built-in server target loads, and while that target is active.
+While the target is active, the app watches the data dir. If `fs.watch` fails,
+for example with `ENOSPC`, the app checks the file every 2 seconds instead
+(`src/server-moved.ts`). The server writes the lock before the new machine
+takes over and removes it if the move is rolled back, so the app acts only on a
+committed move. A move is committed when the local server address answers
+`/health` with 410 `code: "server_moved"`, or when nothing listens there and no
+launcher process is alive. The app checks once when it starts or loads the
+built-in server. When a move finishes while the app is open, the app checks every
+second for up to 120 seconds. It stops if the lock disappears. The first time the app
+sees a committed lock for a `moveId`, it switches the server target once:
+
+- `mode: "connect"` selects `connectHandle` with `serverUrl`.
+- `mode: "direct"` sets the custom server URL. When a move finishes while
+  the app is open, the app waits up to 60 seconds for the new `/health`
+  endpoint before it switches the window.
+
+The app shows "Your bb server moved to <toHostName>" once for each `moveId`
+(`<userData>/server-move-notice.json`). It still starts its own `bb-app`
+launcher unless another bb process answers the local server port. The launcher
+runs this computer as a regular machine, and quitting the app stops it. If the
+app has no stored bb Connect credential, it signs in to a connect target with
+the `x-bb-connect-machine` header that the move wrote to the data dir's
+`config.json`. The app logs a warning and ignores an invalid lock.
+
+On startup, a saved built-in server choice also switches to the moved server;
+it never starts the old copy automatically. A different saved remote server
+choice remains selected. Explicitly picking the built-in server while the move
+lock exists shows "bb moved to <toHostName>" with **Open <toHostName>** and
+**Choose server…**. The screen explains whether the old copy is locked or was
+deleted. Selecting the built-in server does not unlock the old copy or remove
+its background machine service.
+
+Startup error screens list their actions as buttons. Any screen where
+retrying can help shows **Try again**. **Choose server…** opens the Server menu,
+where the user can select the built-in server if needed. A bb Connect
+`unauthorized` error has no **Try again**, because the same credential fails
+the same way. **Reconnect** opens account sign-in in a desktop
+window. The app clears its old account sign-in, waits for a new session, then
+retries the selected server. A valid account session can mint and renew the
+desktop session when a machine credential is rejected. Closing the sign-in
+window leaves the error screen available. Fatal errors have no buttons. The renderer sends the chosen
+action on `bb-desktop:startup-action`. The main process accepts only actions
+from the error page that is currently loaded in an app window's main frame.

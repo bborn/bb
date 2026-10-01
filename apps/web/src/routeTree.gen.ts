@@ -9,6 +9,8 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from "./routes/__root";
+import { Route as SitemapDotxmlRouteImport } from "./routes/sitemap[.]xml";
+import { Route as RobotsDottxtRouteImport } from "./routes/robots[.]txt";
 import { Route as PrivacyRouteImport } from "./routes/privacy";
 import { Route as MarketplaceRouteImport } from "./routes/marketplace_";
 import { Route as DashboardRouteImport } from "./routes/dashboard";
@@ -25,12 +27,23 @@ import { Route as DotwellKnownAppleAppSiteAssociationRouteImport } from "./route
 import { Route as MarketplaceAuthorGithubRouteImport } from "./routes/marketplace_.author.$github";
 import { Route as MarketplaceV2SplatRouteImport } from "./routes/marketplace.v2.$";
 import { Route as MarketplaceV1SplatRouteImport } from "./routes/marketplace.v1.$";
+import { Route as MarketplaceOgPluginIdRouteImport } from "./routes/marketplace.og.$pluginId";
 import { Route as ApiConnectRevokeMachineRouteImport } from "./routes/api.connect.revoke-machine";
 import { Route as ApiConnectRedeemMachineRouteImport } from "./routes/api.connect.redeem-machine";
 import { Route as ApiConnectRedeemRouteImport } from "./routes/api.connect.redeem";
 import { Route as ApiConnectMachineCodeRouteImport } from "./routes/api.connect.machine-code";
 import { Route as ApiAuthSplatRouteImport } from "./routes/api.auth.$";
 
+const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
+  id: "/sitemap.xml",
+  path: "/sitemap.xml",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const RobotsDottxtRoute = RobotsDottxtRouteImport.update({
+  id: "/robots.txt",
+  path: "/robots.txt",
+  getParentRoute: () => rootRouteImport,
+} as any);
 const PrivacyRoute = PrivacyRouteImport.update({
   id: "/privacy",
   path: "/privacy",
@@ -113,6 +126,11 @@ const MarketplaceV1SplatRoute = MarketplaceV1SplatRouteImport.update({
   path: "/marketplace/v1/$",
   getParentRoute: () => rootRouteImport,
 } as any);
+const MarketplaceOgPluginIdRoute = MarketplaceOgPluginIdRouteImport.update({
+  id: "/marketplace/og/$pluginId",
+  path: "/marketplace/og/$pluginId",
+  getParentRoute: () => rootRouteImport,
+} as any);
 const ApiConnectRevokeMachineRoute = ApiConnectRevokeMachineRouteImport.update({
   id: "/api/connect/revoke-machine",
   path: "/api/connect/revoke-machine",
@@ -146,6 +164,8 @@ export interface FileRoutesByFullPath {
   "/dashboard": typeof DashboardRoute;
   "/marketplace": typeof MarketplaceRouteWithChildren;
   "/privacy": typeof PrivacyRoute;
+  "/robots.txt": typeof RobotsDottxtRoute;
+  "/sitemap.xml": typeof SitemapDotxmlRoute;
   "/.well-known/apple-app-site-association": typeof DotwellKnownAppleAppSiteAssociationRoute;
   "/.well-known/assetlinks.json": typeof DotwellKnownAssetlinksDotjsonRoute;
   "/api/subscribe": typeof ApiSubscribeRoute;
@@ -158,6 +178,7 @@ export interface FileRoutesByFullPath {
   "/api/connect/redeem": typeof ApiConnectRedeemRoute;
   "/api/connect/redeem-machine": typeof ApiConnectRedeemMachineRoute;
   "/api/connect/revoke-machine": typeof ApiConnectRevokeMachineRoute;
+  "/marketplace/og/$pluginId": typeof MarketplaceOgPluginIdRoute;
   "/marketplace/v1/$": typeof MarketplaceV1SplatRoute;
   "/marketplace/v2/$": typeof MarketplaceV2SplatRoute;
   "/marketplace/author/$github": typeof MarketplaceAuthorGithubRoute;
@@ -169,6 +190,8 @@ export interface FileRoutesByTo {
   "/dashboard": typeof DashboardRoute;
   "/marketplace": typeof MarketplaceRouteWithChildren;
   "/privacy": typeof PrivacyRoute;
+  "/robots.txt": typeof RobotsDottxtRoute;
+  "/sitemap.xml": typeof SitemapDotxmlRoute;
   "/.well-known/apple-app-site-association": typeof DotwellKnownAppleAppSiteAssociationRoute;
   "/.well-known/assetlinks.json": typeof DotwellKnownAssetlinksDotjsonRoute;
   "/api/subscribe": typeof ApiSubscribeRoute;
@@ -181,6 +204,7 @@ export interface FileRoutesByTo {
   "/api/connect/redeem": typeof ApiConnectRedeemRoute;
   "/api/connect/redeem-machine": typeof ApiConnectRedeemMachineRoute;
   "/api/connect/revoke-machine": typeof ApiConnectRevokeMachineRoute;
+  "/marketplace/og/$pluginId": typeof MarketplaceOgPluginIdRoute;
   "/marketplace/v1/$": typeof MarketplaceV1SplatRoute;
   "/marketplace/v2/$": typeof MarketplaceV2SplatRoute;
   "/marketplace/author/$github": typeof MarketplaceAuthorGithubRoute;
@@ -193,6 +217,8 @@ export interface FileRoutesById {
   "/dashboard": typeof DashboardRoute;
   "/marketplace_": typeof MarketplaceRouteWithChildren;
   "/privacy": typeof PrivacyRoute;
+  "/robots.txt": typeof RobotsDottxtRoute;
+  "/sitemap.xml": typeof SitemapDotxmlRoute;
   "/.well-known/apple-app-site-association": typeof DotwellKnownAppleAppSiteAssociationRoute;
   "/.well-known/assetlinks.json": typeof DotwellKnownAssetlinksDotjsonRoute;
   "/api/subscribe": typeof ApiSubscribeRoute;
@@ -205,6 +231,7 @@ export interface FileRoutesById {
   "/api/connect/redeem": typeof ApiConnectRedeemRoute;
   "/api/connect/redeem-machine": typeof ApiConnectRedeemMachineRoute;
   "/api/connect/revoke-machine": typeof ApiConnectRevokeMachineRoute;
+  "/marketplace/og/$pluginId": typeof MarketplaceOgPluginIdRoute;
   "/marketplace/v1/$": typeof MarketplaceV1SplatRoute;
   "/marketplace/v2/$": typeof MarketplaceV2SplatRoute;
   "/marketplace_/author/$github": typeof MarketplaceAuthorGithubRoute;
@@ -218,6 +245,8 @@ export interface FileRouteTypes {
     | "/dashboard"
     | "/marketplace"
     | "/privacy"
+    | "/robots.txt"
+    | "/sitemap.xml"
     | "/.well-known/apple-app-site-association"
     | "/.well-known/assetlinks.json"
     | "/api/subscribe"
@@ -230,6 +259,7 @@ export interface FileRouteTypes {
     | "/api/connect/redeem"
     | "/api/connect/redeem-machine"
     | "/api/connect/revoke-machine"
+    | "/marketplace/og/$pluginId"
     | "/marketplace/v1/$"
     | "/marketplace/v2/$"
     | "/marketplace/author/$github";
@@ -241,6 +271,8 @@ export interface FileRouteTypes {
     | "/dashboard"
     | "/marketplace"
     | "/privacy"
+    | "/robots.txt"
+    | "/sitemap.xml"
     | "/.well-known/apple-app-site-association"
     | "/.well-known/assetlinks.json"
     | "/api/subscribe"
@@ -253,6 +285,7 @@ export interface FileRouteTypes {
     | "/api/connect/redeem"
     | "/api/connect/redeem-machine"
     | "/api/connect/revoke-machine"
+    | "/marketplace/og/$pluginId"
     | "/marketplace/v1/$"
     | "/marketplace/v2/$"
     | "/marketplace/author/$github";
@@ -264,6 +297,8 @@ export interface FileRouteTypes {
     | "/dashboard"
     | "/marketplace_"
     | "/privacy"
+    | "/robots.txt"
+    | "/sitemap.xml"
     | "/.well-known/apple-app-site-association"
     | "/.well-known/assetlinks.json"
     | "/api/subscribe"
@@ -276,6 +311,7 @@ export interface FileRouteTypes {
     | "/api/connect/redeem"
     | "/api/connect/redeem-machine"
     | "/api/connect/revoke-machine"
+    | "/marketplace/og/$pluginId"
     | "/marketplace/v1/$"
     | "/marketplace/v2/$"
     | "/marketplace_/author/$github";
@@ -288,6 +324,8 @@ export interface RootRouteChildren {
   DashboardRoute: typeof DashboardRoute;
   MarketplaceRoute: typeof MarketplaceRouteWithChildren;
   PrivacyRoute: typeof PrivacyRoute;
+  RobotsDottxtRoute: typeof RobotsDottxtRoute;
+  SitemapDotxmlRoute: typeof SitemapDotxmlRoute;
   DotwellKnownAppleAppSiteAssociationRoute: typeof DotwellKnownAppleAppSiteAssociationRoute;
   DotwellKnownAssetlinksDotjsonRoute: typeof DotwellKnownAssetlinksDotjsonRoute;
   ApiSubscribeRoute: typeof ApiSubscribeRoute;
@@ -299,12 +337,27 @@ export interface RootRouteChildren {
   ApiConnectRedeemRoute: typeof ApiConnectRedeemRoute;
   ApiConnectRedeemMachineRoute: typeof ApiConnectRedeemMachineRoute;
   ApiConnectRevokeMachineRoute: typeof ApiConnectRevokeMachineRoute;
+  MarketplaceOgPluginIdRoute: typeof MarketplaceOgPluginIdRoute;
   MarketplaceV1SplatRoute: typeof MarketplaceV1SplatRoute;
   MarketplaceV2SplatRoute: typeof MarketplaceV2SplatRoute;
 }
 
 declare module "@tanstack/react-router" {
   interface FileRoutesByPath {
+    "/sitemap.xml": {
+      id: "/sitemap.xml";
+      path: "/sitemap.xml";
+      fullPath: "/sitemap.xml";
+      preLoaderRoute: typeof SitemapDotxmlRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/robots.txt": {
+      id: "/robots.txt";
+      path: "/robots.txt";
+      fullPath: "/robots.txt";
+      preLoaderRoute: typeof RobotsDottxtRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
     "/privacy": {
       id: "/privacy";
       path: "/privacy";
@@ -417,6 +470,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof MarketplaceV1SplatRouteImport;
       parentRoute: typeof rootRouteImport;
     };
+    "/marketplace/og/$pluginId": {
+      id: "/marketplace/og/$pluginId";
+      path: "/marketplace/og/$pluginId";
+      fullPath: "/marketplace/og/$pluginId";
+      preLoaderRoute: typeof MarketplaceOgPluginIdRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
     "/api/connect/revoke-machine": {
       id: "/api/connect/revoke-machine";
       path: "/api/connect/revoke-machine";
@@ -476,6 +536,8 @@ const rootRouteChildren: RootRouteChildren = {
   DashboardRoute: DashboardRoute,
   MarketplaceRoute: MarketplaceRouteWithChildren,
   PrivacyRoute: PrivacyRoute,
+  RobotsDottxtRoute: RobotsDottxtRoute,
+  SitemapDotxmlRoute: SitemapDotxmlRoute,
   DotwellKnownAppleAppSiteAssociationRoute:
     DotwellKnownAppleAppSiteAssociationRoute,
   DotwellKnownAssetlinksDotjsonRoute: DotwellKnownAssetlinksDotjsonRoute,
@@ -488,6 +550,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiConnectRedeemRoute: ApiConnectRedeemRoute,
   ApiConnectRedeemMachineRoute: ApiConnectRedeemMachineRoute,
   ApiConnectRevokeMachineRoute: ApiConnectRevokeMachineRoute,
+  MarketplaceOgPluginIdRoute: MarketplaceOgPluginIdRoute,
   MarketplaceV1SplatRoute: MarketplaceV1SplatRoute,
   MarketplaceV2SplatRoute: MarketplaceV2SplatRoute,
 };

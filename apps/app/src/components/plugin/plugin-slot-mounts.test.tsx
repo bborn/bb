@@ -15,10 +15,11 @@ import {
   render,
   screen,
 } from "@testing-library/react";
-import { createStore, Provider } from "jotai";
+import { createStore } from "jotai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PERSONAL_PROJECT_ID } from "@bb/domain";
 import type {
+  ExperimentalComposerSelection,
   PluginComposerApi,
   PluginFileOpenerProps,
   PluginNewThreadPanelProps,
@@ -59,7 +60,8 @@ import {
 } from "./plugin-composer-host";
 import { PluginHomepageSections } from "./PluginHomepageSections";
 import { makePluginRegistrationSet as registrationSet } from "@/test/fixtures/plugins";
-import { PluginNavSidebarItems } from "./PluginNavSidebarItems";
+import { registerNavigationPlugin } from "@/test/fixtures/navigation-plugin";
+import { renderNavigationHarness } from "@/test/navigation-harness";
 import {
   getComposerInputLock,
   useComposer,
@@ -1299,12 +1301,21 @@ describe("useComposer", () => {
     await act(async () => {
       await captured!.experimental_submit({ sendAt });
     });
-    expect(submit).toHaveBeenCalledWith({ sendAt });
+    expect(submit).toHaveBeenCalledWith({ sendAt }, undefined);
+
+    const experimental_data = { kind: "draft" };
+    await act(async () => {
+      await captured!.experimental_submit({ experimental_data });
+    });
+    expect(submit).toHaveBeenLastCalledWith(
+      { experimental_data },
+      { pluginId: "demo", data: experimental_data },
+    );
 
     await expect(
       captured!.experimental_submit({ sendAt: Date.now() - 1 }),
     ).rejects.toThrow(/future/);
-    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledTimes(2);
 
     view.unmount();
     render(
@@ -1313,13 +1324,161 @@ describe("useComposer", () => {
       </MemoryRouter>,
     );
     await expect(captured!.experimental_submit({ sendAt })).rejects.toThrow(
-      /cannot schedule/,
+      /cannot submit/,
     );
-    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledTimes(2);
   });
 });
 
-describe("PluginNavSidebarItems + PluginPanelView", () => {
+describe("useComposer().experimental_setSelection", () => {
+  function ComposerCustomizationMount() {
+    const view = useComposerView();
+    return <ComposerActionsSlot view={view} />;
+  }
+
+  function registerSelectionProbe(
+    onRender: (composer: PluginComposerApi) => void,
+  ) {
+    function SelectionProbe() {
+      onRender(useComposer());
+      return <div>selection probe</div>;
+    }
+    setPluginSlotRegistrations("demo", {
+      homepageSections: [],
+      settingsSections: [],
+      navPanels: [],
+      threadPanelActions: [],
+      sidebarFooterActions: [],
+      fileOpeners: [],
+      messageDirectives: [],
+      composerCustomizations: [
+        {
+          id: "selection",
+          actions: [{ id: "probe", component: SelectionProbe }],
+        },
+      ],
+    });
+  }
+
+  const emptyDraft: PromptDraftState = {
+    text: "",
+    mentions: [],
+    attachments: [],
+  };
+
+  function Harness({
+    host,
+  }: {
+    host: Omit<
+      PluginComposerHost,
+      "getCurrent" | "subscribeDraft" | "setDraft" | "focus"
+    >;
+  }) {
+    const value = useMemo<PluginComposerHost>(
+      () => ({
+        ...host,
+        getCurrent: () => emptyDraft,
+        subscribeDraft: () => () => {},
+        setDraft: () => {},
+        focus: () => {},
+      }),
+      [host],
+    );
+    return (
+      <PluginComposerHostProvider value={value}>
+        <ComposerCustomizationMount />
+      </PluginComposerHostProvider>
+    );
+  }
+
+  it("routes to the composer host, validates the selection, and refuses where there are no pickers", async () => {
+    const setSelection = vi.fn(
+      async (selection: ExperimentalComposerSelection) => ({
+        ...selection,
+        model: "gpt-5",
+      }),
+    );
+    let captured: PluginComposerApi | null = null;
+    registerSelectionProbe((composer) => {
+      captured = composer;
+    });
+
+    const threadView = render(
+      <MemoryRouter initialEntries={["/threads/thr_selection"]}>
+        <Harness
+          host={{
+            scope: { kind: "thread", threadId: "thr_selection" },
+            textEffectKey: "thread:thr_selection",
+            setSelection,
+          }}
+        />
+      </MemoryRouter>,
+    );
+    await expect(
+      captured!.experimental_setSelection({
+        providerId: "codex",
+        model: "gpt-5-mini",
+        reasoningLevel: "high",
+      }),
+    ).resolves.toEqual({
+      providerId: "codex",
+      model: "gpt-5",
+      reasoningLevel: "high",
+    });
+    expect(setSelection).toHaveBeenCalledWith({
+      providerId: "codex",
+      model: "gpt-5-mini",
+      reasoningLevel: "high",
+    });
+
+    await expect(
+      captured!.experimental_setSelection({
+        reasoningLevel: "extreme" as never,
+      }),
+    ).rejects.toThrow(/reasoning level/);
+    await expect(
+      captured!.experimental_setSelection({ permissionMode: "yolo" as never }),
+    ).rejects.toThrow(/permission mode/);
+    await expect(
+      captured!.experimental_setSelection({ serviceTier: "turbo" as never }),
+    ).rejects.toThrow(/service tier/);
+    await expect(
+      captured!.experimental_setSelection({
+        environment: { type: "teleport" } as never,
+      }),
+    ).rejects.toThrow(/environment/);
+    expect(setSelection).toHaveBeenCalledTimes(1);
+    threadView.unmount();
+
+    for (const scope of [
+      {
+        kind: "queued-message" as const,
+        threadId: "thr_selection",
+        queuedMessageId: "qmsg_1",
+      },
+      {
+        kind: "side-chat" as const,
+        projectId: "proj_1",
+        parentThreadId: "thr_selection",
+        tabId: "side-chat:one",
+        childThreadId: null,
+      },
+    ]) {
+      const view = render(
+        <MemoryRouter initialEntries={["/threads/thr_selection"]}>
+          <Harness host={{ scope, textEffectKey: `${scope.kind}:probe` }} />
+        </MemoryRouter>,
+      );
+      await expect(
+        captured!.experimental_setSelection({ model: "gpt-5" }),
+      ).rejects.toThrow(/no pickers/);
+      view.unmount();
+    }
+    expect(setSelection).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Navigation plugin + PluginPanelView", () => {
   function Board() {
     return <div>board panel body</div>;
   }
@@ -1341,19 +1500,17 @@ describe("PluginNavSidebarItems + PluginPanelView", () => {
     );
   }
 
-  it("keeps the Automations row in the nav list", () => {
+  it("keeps the Automations row in the nav list", async () => {
+    await registerNavigationPlugin();
     registerAutomationsPanel();
 
-    render(
-      <MemoryRouter>
-        <PluginNavSidebarItems />
-      </MemoryRouter>,
-    );
+    renderNavigationHarness();
 
     expect(screen.getByRole("button", { name: "Automations" })).toBeDefined();
   });
 
-  it("renders a sidebar entry that routes to the plugin panel", () => {
+  it("renders a sidebar entry that routes to the plugin panel", async () => {
+    await registerNavigationPlugin();
     setPluginSlotRegistrations(
       "demo",
       registrationSet({
@@ -1368,9 +1525,8 @@ describe("PluginNavSidebarItems + PluginPanelView", () => {
         ],
       }),
     );
-    render(
-      <MemoryRouter initialEntries={["/"]}>
-        <PluginNavSidebarItems />
+    renderNavigationHarness({
+      children: (
         <Routes>
           <Route path="/" element={<div>home</div>} />
           <Route
@@ -1378,8 +1534,8 @@ describe("PluginNavSidebarItems + PluginPanelView", () => {
             element={<RoutedPluginPanelView />}
           />
         </Routes>
-      </MemoryRouter>,
-    );
+      ),
+    });
     fireEvent.click(screen.getByText("Demo board"));
     expect(screen.getByText("board panel body")).toBeDefined();
   });
@@ -1443,7 +1599,8 @@ describe("PluginNavSidebarItems + PluginPanelView", () => {
     ).toBeNull();
   });
 
-  it("shows a plugin panel's position when it is open in a split", () => {
+  it("shows a plugin panel's position when it is open in a split", async () => {
+    await registerNavigationPlugin();
     setPluginSlotRegistrations(
       "demo",
       registrationSet({
@@ -1489,13 +1646,7 @@ describe("PluginNavSidebarItems + PluginPanelView", () => {
       },
     });
 
-    render(
-      <Provider store={store}>
-        <MemoryRouter initialEntries={["/"]}>
-          <PluginNavSidebarItems splitEnabled />
-        </MemoryRouter>
-      </Provider>,
-    );
+    renderNavigationHarness({ store, splitEnabled: true });
 
     const splitMap = screen.getByRole("img", {
       name: "Demo board — open in split",
@@ -1504,7 +1655,8 @@ describe("PluginNavSidebarItems + PluginPanelView", () => {
     expect(label.nextElementSibling).toBe(splitMap);
   });
 
-  it("keeps the sidebar entry active on nested plugin panel routes", () => {
+  it("keeps the sidebar entry active on nested plugin panel routes", async () => {
+    await registerNavigationPlugin();
     setPluginSlotRegistrations(
       "simple-notes",
       registrationSet({
@@ -1519,15 +1671,11 @@ describe("PluginNavSidebarItems + PluginPanelView", () => {
         ],
       }),
     );
-    render(
-      <MemoryRouter
-        initialEntries={[
-          "/plugins/simple-notes/simple-notes/bb-plugin-marketplaces-and-compatible-updates.md",
-        ]}
-      >
-        <PluginNavSidebarItems />
-      </MemoryRouter>,
-    );
+    renderNavigationHarness({
+      initialEntries: [
+        "/plugins/simple-notes/simple-notes/bb-plugin-marketplaces-and-compatible-updates.md",
+      ],
+    });
 
     expect(
       screen
@@ -1536,7 +1684,8 @@ describe("PluginNavSidebarItems + PluginPanelView", () => {
     ).toBe("page");
   });
 
-  it("draws a remembered plugin row before boot and keeps the same node when the plugin registers", () => {
+  it("draws a remembered plugin row before boot and keeps the same node when the plugin registers", async () => {
+    await registerNavigationPlugin();
     resetPluginFrontendBootStateForTest();
     writeLastKnownPluginNavPanelChrome([
       {
@@ -1547,11 +1696,7 @@ describe("PluginNavSidebarItems + PluginPanelView", () => {
         icon: "columns",
       },
     ]);
-    render(
-      <MemoryRouter>
-        <PluginNavSidebarItems />
-      </MemoryRouter>,
-    );
+    renderNavigationHarness();
     const rememberedRow = screen.getByRole("button", { name: "Demo board" });
 
     act(() => {
@@ -1576,7 +1721,8 @@ describe("PluginNavSidebarItems + PluginPanelView", () => {
     );
   });
 
-  it("drops a remembered plugin row that never registers once frontends have settled", () => {
+  it("drops a remembered plugin row that never registers once frontends have settled", async () => {
+    await registerNavigationPlugin();
     resetPluginFrontendBootStateForTest();
     writeLastKnownPluginNavPanelChrome([
       {
@@ -1587,11 +1733,7 @@ describe("PluginNavSidebarItems + PluginPanelView", () => {
         icon: "columns",
       },
     ]);
-    render(
-      <MemoryRouter>
-        <PluginNavSidebarItems />
-      </MemoryRouter>,
-    );
+    renderNavigationHarness();
     expect(screen.getByRole("button", { name: "Ghost board" })).toBeDefined();
     act(() => markPluginFrontendsSettled());
     expect(screen.queryByRole("button", { name: "Ghost board" })).toBeNull();

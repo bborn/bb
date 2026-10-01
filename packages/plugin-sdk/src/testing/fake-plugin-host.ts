@@ -15,7 +15,6 @@ import {
   adoptHttpRouteResponse,
   aiServiceAlreadyRegisteredMessage,
   pluginHookAlreadyRegisteredMessage,
-  assertAiServiceRegistrable,
   coerceStoredPluginSettingValue,
   enforcePluginCliOutputLimit,
   isStandardSchema,
@@ -34,6 +33,7 @@ import {
   normalizeRealtimePayload,
   normalizeRpcJsonResult,
   normalizeRpcRegistration,
+  publishRpcMethod,
   normalizeWebSocketRouteRegistration,
   pluginCliCollisionWarning,
   providerAlreadyRegisteredMessage,
@@ -57,7 +57,7 @@ import type {
   PluginAgentConfiguration,
   PluginAgentConfigurationContext,
   PluginAgentToolContext,
-  PluginAgentToolPresentation,
+  PluginRowPresentation,
   PluginAgentToolResult,
   PluginAgents,
   PluginBackground,
@@ -82,6 +82,7 @@ import type {
   PluginKvStorage,
   PluginLogger,
   PluginMentionItem,
+  PluginMentionProviderRegistration,
   PluginMentionSearchContext,
   PluginMentionTrigger,
   PluginAiServiceDeclaration,
@@ -215,11 +216,11 @@ export interface FakeAgentToolRecord {
   instructions: string | null;
   /**
    * The plugin's declared row presentation, null when it declared none.
-   * Parsed by the shared `parsePluginAgentToolPresentation`, so the record
+   * Parsed by the shared `parsePluginRowPresentation`, so the record
    * holds exactly what the production host stores and a presentation bb
    * rejects is rejected here with the same message.
    */
-  presentation: PluginAgentToolPresentation | null;
+  presentation: PluginRowPresentation | null;
   /** JSON-schema object the host would send providers. */
   inputSchema: unknown;
   parse(
@@ -238,9 +239,7 @@ export interface FakeMentionProviderRecord {
   search: (
     ctx: PluginMentionSearchContext,
   ) => PluginMentionItem[] | Promise<PluginMentionItem[]>;
-  resolve: (
-    itemId: string,
-  ) => { context: string } | Promise<{ context: string }>;
+  resolve: PluginMentionProviderRegistration["resolve"];
 }
 
 export interface FakeRealtimeSignal {
@@ -261,6 +260,9 @@ export interface FakePluginRegistrations {
   settingsDescriptors: PluginSettingDescriptors;
   httpRoutes: FakeHttpRouteRecord[];
   websocketRoutes: ExperimentalFakeWebSocketRouteRecord[];
+  experimental_publishedRpcMethods: Array<
+    NonNullable<ReturnType<typeof publishRpcMethod>>
+  >;
   rpcMethods: string[];
   services: FakeServiceRecord[];
   schedules: FakeScheduleRecord[];
@@ -468,6 +470,12 @@ export interface FakePluginLifecycleControls {
    * PluginContextStaleError). Idempotent.
    */
   dispose(): Promise<void>;
+  /**
+   * Run every handler registered with `bb.onInstall`, in
+   * registration order, as bb does right after a fresh install. A handler
+   * that throws is logged at warn level and the rest still run.
+   */
+  install(): Promise<void>;
 }
 
 /**
@@ -518,10 +526,8 @@ export interface CreateFakePluginHostOptions {
   sharedPortTunnelIdentities?: Record<string, PluginSharedPortTunnelIdentity>;
   /**
    * Whether the plugin's manifest declares a `bb.host` entry. Production
-   * refuses `bb.providers.register` (the provider would have no bridge to
-   * run on) and `experimental_aiServices.register` (the service would have
-   * nothing to run on) without one; the fake applies the same rules.
-   * Defaults to true.
+   * refuses `bb.providers.register` without one (the provider would have no
+   * bridge to run on); the fake applies the same rule. Defaults to true.
    */
   experimental_hostEntry?: boolean;
   /**
@@ -582,6 +588,7 @@ function jsonRoundTrip(value: unknown, what: string): unknown {
 }
 
 interface FakeRpcRecord {
+  publication: ReturnType<typeof publishRpcMethod>;
   inputSchema: StandardSchemaV1;
   outputSchema: StandardSchemaV1;
   handler: (input: never) => unknown;
@@ -835,12 +842,13 @@ function createFakePluginHostInternal(
   // --- rpc ---
   const rpcHandlers = new Map<string, FakeRpcRecord>();
   const rpc: PluginRpc = {
-    register(contract, handlers) {
+    register(contract, handlers, registrationOptions) {
       assertLive();
       for (const [name, record] of normalizeRpcRegistration(
         contract,
         handlers,
         rpcHandlers,
+        registrationOptions,
       )) {
         rpcHandlers.set(name, record);
       }
@@ -970,25 +978,28 @@ function createFakePluginHostInternal(
     register(declaration) {
       assertLive();
       const normalized = validatePluginAiServiceDeclaration(declaration);
-      // The same refusals production makes at the register call. The fake
-      // host builds no artifact; the declared entry stands in for it.
-      assertAiServiceRegistrable({
-        id: normalized.id,
-        hostArtifact:
-          options.experimental_hostEntry === false ? null : "declared",
-        hostArtifactProblem: null,
-      });
       if (
         aiServiceRegistrations.some((existing) => existing.id === normalized.id)
       ) {
         throw new Error(aiServiceAlreadyRegisteredMessage(normalized.id));
       }
-      aiServiceRegistrations.push(normalized);
+      const registration: PluginAiServiceDeclaration = Object.freeze({
+        id: normalized.id,
+        displayName: normalized.displayName,
+        ...(normalized.complete === null
+          ? {}
+          : { complete: normalized.complete }),
+        ...(normalized.transcribe === null
+          ? {}
+          : { transcribe: normalized.transcribe }),
+        ...(normalized.status === null ? {} : { status: normalized.status }),
+      });
+      aiServiceRegistrations.push(registration);
       let disposed = false;
       const dispose = (): void => {
         if (disposed) return;
         disposed = true;
-        const index = aiServiceRegistrations.indexOf(normalized);
+        const index = aiServiceRegistrations.indexOf(registration);
         if (index !== -1) aiServiceRegistrations.splice(index, 1);
       };
       disposeHooks.push(dispose);
@@ -1025,7 +1036,7 @@ function createFakePluginHostInternal(
       name: string;
       description: string;
       instructions?: string;
-      presentation?: PluginAgentToolPresentation;
+      presentation?: PluginRowPresentation;
       parameters: unknown;
       execute(
         params: never,
@@ -1105,6 +1116,7 @@ function createFakePluginHostInternal(
   } = {
     "experimental_thread.events": [],
     "experimental_terminal.input": [],
+    "experimental_host.deleted": [],
     "thread.created": [],
     "thread.active": [],
     "thread.idle": [],
@@ -1137,6 +1149,7 @@ function createFakePluginHostInternal(
     import("../backend-contract.js").ServerAccessProviderDeclaration
   >();
   const disposeHooks: Array<() => void | Promise<void>> = [];
+  const installHandlers: Array<() => void | Promise<void>> = [];
   const serviceControllers: AbortController[] = [];
   let nextInteractionId = 1;
   const pendingInteractions = new Map<
@@ -1154,8 +1167,17 @@ function createFakePluginHostInternal(
     assertLive();
     const normalized = normalizeInteractionRequest(request);
     const normalizedRequest: PluginInteractionRequest = {
-      ...request,
-      ...normalized,
+      threadId: normalized.threadId,
+      rendererId: normalized.rendererId,
+      title: normalized.title,
+      payload: normalized.payload,
+      timeoutMs: normalized.timeoutMs,
+      ...(normalized.presentation === null
+        ? {}
+        : { presentation: normalized.presentation }),
+      ...(normalized.describeSubmission === null
+        ? {}
+        : { describeSubmission: normalized.describeSubmission }),
     };
     const id = `fake-interaction-${nextInteractionId++}`;
     return new Promise<PluginInteractionResult>((resolve) => {
@@ -1506,6 +1528,13 @@ function createFakePluginHostInternal(
       assertLive();
       disposeHooks.push(hook);
     },
+    onInstall(handler) {
+      assertLive();
+      if (typeof handler !== "function") {
+        throw new Error("onInstall expects a function");
+      }
+      installHandlers.push(handler);
+    },
   };
 
   async function disposeHost(cleanupStorage: boolean): Promise<void> {
@@ -1568,6 +1597,11 @@ function createFakePluginHostInternal(
       settingsDescriptors,
       httpRoutes,
       websocketRoutes,
+      get experimental_publishedRpcMethods() {
+        return [...rpcHandlers.values()].flatMap((record) =>
+          record.publication === null ? [] : [record.publication],
+        );
+      },
       get rpcMethods() {
         return [...rpcHandlers.keys()];
       },
@@ -1589,6 +1623,8 @@ function createFakePluginHostInternal(
             threadEventHandlers["experimental_thread.events"].length,
           "experimental_terminal.input":
             threadEventHandlers["experimental_terminal.input"].length,
+          "experimental_host.deleted":
+            threadEventHandlers["experimental_host.deleted"].length,
           "thread.created": threadEventHandlers["thread.created"].length,
           "thread.active": threadEventHandlers["thread.active"].length,
           "thread.idle": threadEventHandlers["thread.idle"].length,
@@ -2090,6 +2126,17 @@ function createFakePluginHostInternal(
 
     async dispose() {
       await disposeHost(true);
+    },
+
+    async install() {
+      assertLive();
+      for (const handler of [...installHandlers]) {
+        try {
+          await handler();
+        } catch (error) {
+          emitLog("warn", `install handler failed: ${errorMessage(error)}`);
+        }
+      }
     },
   };
 

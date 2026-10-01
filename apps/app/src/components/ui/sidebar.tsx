@@ -8,16 +8,9 @@ import { Button } from "@bb/shared-ui/button";
 import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "@bb/shared-ui/coarse-pointer-sizing";
 import { Skeleton } from "@bb/shared-ui/skeleton";
 import { Icon } from "@bb/shared-ui/icon";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@bb/shared-ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@bb/shared-ui/tooltip";
 import { setCompactSidebarDrawerShowing } from "./sidebar-mobile-drawer-visibility.js";
-import {
-  getCompactSecondaryPanelPresentation,
-  subscribeCompactSecondaryPanelShelfShowing,
-} from "./secondary-panel-shelf-visibility.js";
+import { usePanelShelfState } from "./secondary-panel-shelf-visibility.js";
 import {
   findTouchById,
   hasTextSelectionWithin,
@@ -34,6 +27,7 @@ const SIDEBAR_MOBILE_SWIPE_OPEN_INTENT_PX = 12;
 const SIDEBAR_MOBILE_SWIPE_OPEN_RATIO = 0.33;
 const SIDEBAR_MOBILE_SWIPE_OPEN_FLING_MIN_RATIO = 0.12;
 const SIDEBAR_MOBILE_SWIPE_OPEN_FLING_VELOCITY_PX_PER_SEC = 450;
+const SIDEBAR_MOBILE_SWIPE_OPEN_FLING_MAX_IDLE_MS = 100;
 const SIDEBAR_MOBILE_DRAG_SETTLE_MS = 220;
 const SIDEBAR_MOBILE_REALIZE_TIMEOUT_MS = 1000;
 const SIDEBAR_MOBILE_DRAG_SETTLE_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
@@ -46,7 +40,7 @@ const SIDEBAR_MOBILE_SHELF_INSET_TRANSITION_CLASS =
 const SIDEBAR_MOBILE_BACKDROP_TRANSITION_CLASS =
   "[transition:opacity_220ms_cubic-bezier(0.32,0.72,0,1),translate_220ms_cubic-bezier(0.32,0.72,0,1)]";
 const SIDEBAR_GROUP_LABEL_BASE_CLASS =
-  "duration-200 flex shrink-0 items-center rounded-md px-1 text-xs font-medium text-sidebar-foreground/75 outline-none ring-sidebar-ring transition-[margin,opa] ease-linear focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0";
+  "duration-200 flex shrink-0 items-center rounded-md px-1 text-xs font-medium text-sidebar-foreground/75 outline-none ring-sidebar-ring transition-[margin,opa] ease-linear focus-visible:ring-2 [&>[data-icon-root]]:size-4 [&>[data-icon-root]]:shrink-0";
 
 type SidebarMobileWidthStyle = React.CSSProperties & {
   "--sidebar-width-mobile": string;
@@ -169,6 +163,7 @@ function createSidebarInsetSwipeSession({
   id,
   startX,
   startY,
+  startTimeMs,
   selectionRoot,
   startTarget,
   canPreventDefault,
@@ -177,11 +172,11 @@ function createSidebarInsetSwipeSession({
   id: number;
   startX: number;
   startY: number;
+  startTimeMs: number;
   selectionRoot: Element | null;
   startTarget: Element | null;
   canPreventDefault: boolean;
 }): SidebarInsetSwipeSession {
-  const nowMs = Date.now();
   return {
     kind,
     id,
@@ -190,7 +185,7 @@ function createSidebarInsetSwipeSession({
     panelWidth: getSidebarMobilePanelWidth(),
     lastProgress: 0,
     lastClientX: startX,
-    lastTimeMs: nowMs,
+    lastTimeMs: startTimeMs,
     velocityX: 0,
     isDragging: false,
     selectionRoot,
@@ -208,11 +203,15 @@ function isSidebarSwipeEdgeZoneTouch(clientX: number): boolean {
 
 function shouldOpenSidebarMobileSwipe(
   session: SidebarInsetSwipeSession,
+  releaseTimeMs: number,
 ): boolean {
   return (
     session.lastProgress >= SIDEBAR_MOBILE_SWIPE_OPEN_RATIO ||
     (session.lastProgress >= SIDEBAR_MOBILE_SWIPE_OPEN_FLING_MIN_RATIO &&
-      session.velocityX >= SIDEBAR_MOBILE_SWIPE_OPEN_FLING_VELOCITY_PX_PER_SEC)
+      session.velocityX >=
+        SIDEBAR_MOBILE_SWIPE_OPEN_FLING_VELOCITY_PX_PER_SEC &&
+      releaseTimeMs - session.lastTimeMs <=
+        SIDEBAR_MOBILE_SWIPE_OPEN_FLING_MAX_IDLE_MS)
   );
 }
 
@@ -1050,6 +1049,21 @@ const SidebarInset = React.forwardRef<
     }
   }, []);
 
+  const recoverInterruptedMobileSwipe = React.useCallback(() => {
+    clearSwipeSession();
+    clearMobileDragSettleTimeout();
+    flushSync(() => {
+      setSuppressMobileCloseAnimation(true);
+      setOpenMobile(false);
+    });
+    clearSidebarMobileDragStyles();
+  }, [
+    clearMobileDragSettleTimeout,
+    clearSwipeSession,
+    setOpenMobile,
+    setSuppressMobileCloseAnimation,
+  ]);
+
   const clearWheelSwipe = React.useCallback(() => {
     wheelSwipeDeltaRef.current = 0;
     if (wheelSwipeResetTimeoutRef.current !== null) {
@@ -1132,7 +1146,6 @@ const SidebarInset = React.forwardRef<
       const deltaY = clientY - session.startY;
       const absDeltaX = Math.abs(deltaX);
       const absDeltaY = Math.abs(deltaY);
-      const nowMs = Date.now();
 
       if (
         !session.isDragging &&
@@ -1179,12 +1192,12 @@ const SidebarInset = React.forwardRef<
         event.preventDefault();
       }
 
-      const elapsedMs = nowMs - session.lastTimeMs;
-      if (elapsedMs > 0) {
+      const elapsedMs = event.timeStamp - session.lastTimeMs;
+      if (elapsedMs > 0 && clientX !== session.lastClientX) {
         session.velocityX =
           ((clientX - session.lastClientX) / elapsedMs) * 1000;
         session.lastClientX = clientX;
-        session.lastTimeMs = nowMs;
+        session.lastTimeMs = event.timeStamp;
       }
       session.lastProgress = progress;
       applySidebarMobileDragStyles({ progress, settling: false });
@@ -1232,7 +1245,7 @@ const SidebarInset = React.forwardRef<
       }
 
       suppressNextSwipeClick();
-      settleMobileSwipe(shouldOpenSidebarMobileSwipe(session));
+      settleMobileSwipe(shouldOpenSidebarMobileSwipe(session, event.timeStamp));
     },
     [clearSwipeSession, settleMobileSwipe, suppressNextSwipeClick],
   );
@@ -1248,9 +1261,12 @@ const SidebarInset = React.forwardRef<
         return;
       }
 
+      if (event.type === "pointerup") {
+        continueSwipe(event.clientX, event.clientY, event);
+      }
       finishMobileSwipe(event);
     },
-    [finishMobileSwipe],
+    [continueSwipe, finishMobileSwipe],
   );
 
   const handleTouchMove = React.useCallback(
@@ -1277,13 +1293,17 @@ const SidebarInset = React.forwardRef<
         return;
       }
 
-      if (getTrackedSwipeTouch(event, session.id) === null) {
+      const touch = findTouchById(event.changedTouches, session.id);
+      if (touch === null) {
         return;
       }
 
+      if (event.type === "touchend") {
+        continueSwipe(touch.clientX, touch.clientY, event);
+      }
       finishMobileSwipe(event);
     },
-    [finishMobileSwipe],
+    [continueSwipe, finishMobileSwipe],
   );
 
   const startTouchSwipe = React.useCallback(
@@ -1291,7 +1311,6 @@ const SidebarInset = React.forwardRef<
       if (
         event.defaultPrevented ||
         !isCompactViewport ||
-        openMobile ||
         event.touches.length !== 1 ||
         !isSidebarInsetSwipeTarget(event.target) ||
         shouldIgnoreSidebarSwipeTarget(event.target)
@@ -1307,7 +1326,14 @@ const SidebarInset = React.forwardRef<
         return;
       }
 
-      clearSwipeSession();
+      if (openMobile) {
+        if (!swipeSessionRef.current?.isDragging) {
+          return;
+        }
+        recoverInterruptedMobileSwipe();
+      } else {
+        clearSwipeSession();
+      }
 
       const canPreventDefault = isSidebarSwipeEdgeZoneTouch(touch.clientX);
       swipeSessionRef.current = createSidebarInsetSwipeSession({
@@ -1315,6 +1341,7 @@ const SidebarInset = React.forwardRef<
         id: touch.identifier,
         startX: touch.clientX,
         startY: touch.clientY,
+        startTimeMs: event.timeStamp,
         selectionRoot: getSidebarSwipeSelectionRoot(event.target),
         startTarget: event.target instanceof Element ? event.target : null,
         canPreventDefault,
@@ -1338,6 +1365,7 @@ const SidebarInset = React.forwardRef<
       handleTouchMove,
       isCompactViewport,
       openMobile,
+      recoverInterruptedMobileSwipe,
     ],
   );
 
@@ -1346,7 +1374,6 @@ const SidebarInset = React.forwardRef<
       if (
         event.defaultPrevented ||
         !isCompactViewport ||
-        openMobile ||
         event.pointerType !== "touch" ||
         !event.isPrimary ||
         event.button !== 0 ||
@@ -1357,12 +1384,20 @@ const SidebarInset = React.forwardRef<
         return;
       }
 
-      clearSwipeSession();
+      if (openMobile) {
+        if (!swipeSessionRef.current?.isDragging) {
+          return;
+        }
+        recoverInterruptedMobileSwipe();
+      } else {
+        clearSwipeSession();
+      }
       swipeSessionRef.current = createSidebarInsetSwipeSession({
         kind: "pointer",
         id: event.pointerId,
         startX: event.clientX,
         startY: event.clientY,
+        startTimeMs: event.timeStamp,
         selectionRoot: getSidebarSwipeSelectionRoot(event.target),
         startTarget: event.target instanceof Element ? event.target : null,
         canPreventDefault: true,
@@ -1386,18 +1421,25 @@ const SidebarInset = React.forwardRef<
       handleSwipeMove,
       isCompactViewport,
       openMobile,
+      recoverInterruptedMobileSwipe,
     ],
   );
 
   React.useEffect(() => {
     const cancelSwipeForTextSelection = () => {
-      const selectionRoot = swipeSessionRef.current?.selectionRoot;
+      const session = swipeSessionRef.current;
+      const selectionRoot = session?.selectionRoot;
       if (
+        session !== null &&
         selectionRoot !== null &&
         selectionRoot !== undefined &&
         hasTextSelectionWithin(selectionRoot)
       ) {
-        clearSwipeSession();
+        if (session.isDragging) {
+          recoverInterruptedMobileSwipe();
+        } else {
+          clearSwipeSession();
+        }
       }
     };
 
@@ -1422,7 +1464,12 @@ const SidebarInset = React.forwardRef<
         cancelSwipeForTextSelection,
       );
     };
-  }, [clearSwipeSession, startPointerSwipe, startTouchSwipe]);
+  }, [
+    clearSwipeSession,
+    recoverInterruptedMobileSwipe,
+    startPointerSwipe,
+    startTouchSwipe,
+  ]);
 
   const handleWheelSwipe = React.useCallback(
     (event: WheelEvent) => {
@@ -1525,18 +1572,15 @@ const SidebarInset = React.forwardRef<
     }
   }, [clearSwipeSession, isCompactViewport, openMobile]);
 
-  const secondaryPanelPresentation = React.useSyncExternalStore(
-    subscribeCompactSecondaryPanelShelfShowing,
-    getCompactSecondaryPanelPresentation,
-    () => "closed" as const,
-  );
   const shelfState = isCompactViewport
     ? openMobile
       ? "open"
       : "closed"
     : undefined;
-  const panelShelfState =
-    isCompactViewport && !openMobile ? secondaryPanelPresentation : undefined;
+  const panelShelfState = usePanelShelfState({
+    isCompactViewport,
+    isSidebarDrawerOpen: openMobile,
+  });
 
   return (
     <main
@@ -1731,7 +1775,7 @@ const SidebarMenuItem = React.forwardRef<
 SidebarMenuItem.displayName = "SidebarMenuItem";
 
 const SIDEBAR_MENU_BUTTON_CLASS =
-  "flex h-8 w-full cursor-pointer items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm outline-none ring-sidebar-ring transition-[width,height,padding] hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0";
+  "flex h-8 w-full cursor-pointer items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm outline-none ring-sidebar-ring transition-[width,height,padding] hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>[data-icon-root]]:size-4 [&>[data-icon-root]]:shrink-0";
 
 const SidebarMenuButton = React.forwardRef<
   HTMLButtonElement,
@@ -1826,4 +1870,5 @@ export {
   useOptionalIsSidebarShowing,
   useSidebar,
   useSidebarContentElementRef,
+  SidebarContentElementContext,
 };

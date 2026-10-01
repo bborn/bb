@@ -174,8 +174,8 @@ describe("ProjectlessMachineSlot", () => {
 
     const trigger = screen.getByRole("button", { name: "Machine" });
     expect(trigger.textContent).toContain("Mac Studio");
-    fireEvent.pointerDown(trigger, { button: 0 });
-    fireEvent.click(screen.getByRole("menuitem", { name: /Local host/u }));
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("option", { name: /Local host/u }));
 
     expect(onSelectProvider).toHaveBeenCalledWith(
       personalWorkspaceProvider,
@@ -402,8 +402,8 @@ describe("EnvironmentSlot", () => {
       </QueryClientProvider>,
     );
     const trigger = screen.getAllByRole("button", { name: "Environment" })[0];
-    fireEvent.pointerDown(trigger!, { button: 0 });
-    expect(screen.getByRole("menu")).toBeTruthy();
+    fireEvent.click(trigger!);
+    expect(screen.getByRole("dialog", { name: "Environment" })).toBeTruthy();
 
     rerender(
       <QueryClientProvider client={queryClient}>
@@ -415,7 +415,7 @@ describe("EnvironmentSlot", () => {
       </QueryClientProvider>,
     );
 
-    expect(screen.getByRole("menu")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Environment" })).toBeTruthy();
     expect(document.querySelector('button[aria-label="Environment"]')).toBe(
       trigger,
     );
@@ -437,8 +437,8 @@ describe("EnvironmentSlot", () => {
       </QueryClientProvider>,
     );
     const trigger = screen.getByRole("button", { name: "Environment" });
-    fireEvent.pointerDown(trigger, { button: 0 });
-    expect(screen.getByRole("menu")).toBeTruthy();
+    fireEvent.click(trigger);
+    expect(screen.getByRole("dialog", { name: "Environment" })).toBeTruthy();
 
     rerender(
       <QueryClientProvider client={queryClient}>
@@ -450,7 +450,7 @@ describe("EnvironmentSlot", () => {
       </QueryClientProvider>,
     );
 
-    expect(screen.getByRole("menu")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Environment" })).toBeTruthy();
     expect(document.querySelector('button[aria-label="Environment"]')).toBe(
       trigger,
     );

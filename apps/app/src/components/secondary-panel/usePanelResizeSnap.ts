@@ -1,10 +1,6 @@
 import { useEffect, useRef } from "react";
 import { flushSync } from "react-dom";
 import { createSplitResizeSnapSession } from "@/lib/split-resize-snap";
-import {
-  THREAD_SECONDARY_PANEL_MAX_SIZE_PERCENT,
-  THREAD_SECONDARY_PANEL_MIN_SIZE_PERCENT,
-} from "./secondaryPanelSizing";
 
 interface UsePanelResizeSnapArgs {
   onResize: (leadingFraction: number) => void;
@@ -32,7 +28,8 @@ export function usePanelResizeSnap({
         hitTargetRef.current?.parentElement !== divider ||
         divider.getAttribute("data-panel-resize-handle-enabled") !== "true" ||
         event.button !== 0
-      ) return;
+      )
+        return;
       activeDragRef.current?.(true);
       const previous = divider.previousElementSibling;
       const next = divider.nextElementSibling;
@@ -50,7 +47,6 @@ export function usePanelResizeSnap({
       if (ownerWindow === null) return;
       event.preventDefault();
       event.stopPropagation();
-      divider.focus({ preventScroll: true });
       const snapSession = createSplitResizeSnapSession(divider, "x", {
         boundaryIndex: 1,
         childCount: 2,
@@ -96,13 +92,7 @@ export function usePanelResizeSnap({
           pointer: moveEvent.clientX,
           start,
         });
-        pendingFraction = Math.max(
-          (100 - THREAD_SECONDARY_PANEL_MAX_SIZE_PERCENT) / 100,
-          Math.min(
-            (100 - THREAD_SECONDARY_PANEL_MIN_SIZE_PERCENT) / 100,
-            result.fraction,
-          ),
-        );
+        pendingFraction = result.fraction;
         if (frame === null) {
           frame = ownerWindow.requestAnimationFrame(applyResize);
         }
@@ -119,7 +109,6 @@ export function usePanelResizeSnap({
         );
         ownerWindow.removeEventListener("mouseup", commitDrag, true);
         ownerWindow.removeEventListener("blur", commitDrag);
-        divider.removeEventListener("keydown", flushResize, true);
         divider.removeEventListener("lostpointercapture", finishForPointer);
         delete divider.dataset.dragging;
         if (divider.hasPointerCapture(pointerId)) {
@@ -159,13 +148,13 @@ export function usePanelResizeSnap({
       ownerWindow.addEventListener("pointercancel", finishForPointer, true);
       ownerWindow.addEventListener("mouseup", commitDrag, true);
       ownerWindow.addEventListener("blur", commitDrag);
-      divider.addEventListener("keydown", flushResize, true);
       divider.addEventListener("lostpointercapture", finishForPointer);
       onDragging(true);
     };
 
     window.addEventListener("pointerdown", onPointerDownCapture, true);
-    return () => window.removeEventListener("pointerdown", onPointerDownCapture, true);
+    return () =>
+      window.removeEventListener("pointerdown", onPointerDownCapture, true);
   }, [onDragging, onResize]);
 
   return hitTargetRef;

@@ -23,11 +23,6 @@
       "types": "./src/host-daemon-entrypoint.ts",
       "default": "./src/host-daemon-entrypoint.ts"
     },
-    "./inference-model": {
-      "source": "./src/inference-model.ts",
-      "types": "./src/inference-model.ts",
-      "default": "./src/inference-model.ts"
-    },
     "./log-level": {
       "source": "./src/log-level.ts",
       "types": "./src/log-level.ts",
@@ -88,6 +83,16 @@
       "types": "./src/bb-app-managed-config.ts",
       "default": "./src/bb-app-managed-config.ts"
     },
+    "./managed-json-file": {
+      "source": "./src/managed-json-file.ts",
+      "types": "./src/managed-json-file.ts",
+      "default": "./src/managed-json-file.ts"
+    },
+    "./file-lock": {
+      "source": "./src/file-lock.ts",
+      "types": "./src/file-lock.ts",
+      "default": "./src/file-lock.ts"
+    },
     "./client-config": {
       "source": "./src/client-config.ts",
       "types": "./src/client-config.ts",
@@ -97,6 +102,11 @@
       "source": "./src/app-runtime-file.ts",
       "types": "./src/app-runtime-file.ts",
       "default": "./src/app-runtime-file.ts"
+    },
+    "./app-update": {
+      "source": "./src/app-update.ts",
+      "types": "./src/app-update.ts",
+      "default": "./src/app-update.ts"
     },
     "./app-surface": {
       "source": "./src/app-surface.ts",
@@ -118,6 +128,11 @@
       "types": "./src/verified-process-stop.ts",
       "default": "./src/verified-process-stop.ts"
     },
+    "./machine-service": {
+      "source": "./src/machine-service.ts",
+      "types": "./src/machine-service.ts",
+      "default": "./src/machine-service.ts"
+    },
     "./child-process-exit": {
       "source": "./src/child-process-exit.ts",
       "types": "./src/child-process-exit.ts",
@@ -131,6 +146,7 @@
   },
   "dependencies": {
     "@bb/domain": "workspace:*",
+    "fs-native-extensions": "1.5.0",
     "zod": "4.3.6"
   },
   "devDependencies": {

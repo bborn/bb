@@ -66,6 +66,7 @@ interface CodexRetryErrorContext {
 
 interface CodexEventTranslationState {
   rateLimitsByLimitId: Map<string, CodexRateLimitSnapshot>;
+  latestRateLimitId: string;
   injectedToolsByName: Map<string, CodexInjectedTool>;
   retryErrorsByTurnKey: Map<string, CodexRetryErrorContext>;
 }
@@ -73,6 +74,7 @@ interface CodexEventTranslationState {
 export function createCodexEventTranslationState(): CodexEventTranslationState {
   return {
     rateLimitsByLimitId: new Map(),
+    latestRateLimitId: "codex",
     injectedToolsByName: new Map(),
     retryErrorsByTurnKey: new Map(),
   };
@@ -181,6 +183,7 @@ export function applyCodexRateLimitUpdate(
     limitId,
   );
   state.rateLimitsByLimitId.set(limitId, rateLimits);
+  state.latestRateLimitId = limitId;
   return rateLimits;
 }
 
@@ -269,7 +272,7 @@ type CodexRateLimitCandidate = {
   rateLimits: ProviderRateLimitState;
 };
 
-function normalizeCodexRateLimits(
+export function normalizeCodexRateLimits(
   state: CodexEventTranslationState,
   preferredLimitId: string,
 ): ProviderRateLimitState {
@@ -1050,9 +1053,7 @@ export function translateCodexEventToDeltas(
           ...(handledEvent.params.turn.error?.message
             ? { error: { message: handledEvent.params.turn.error.message } }
             : {}),
-          ...(status === "completed" || status === "interrupted"
-            ? { providerCheckpointId: handledEvent.params.turn.id }
-            : {}),
+          providerCheckpointId: handledEvent.params.turn.id,
         },
       ];
     }
@@ -1230,6 +1231,12 @@ export function translateCodexEventToDeltas(
             totalTokens: tokenUsage.total.totalTokens,
             inputTokens: tokenUsage.total.inputTokens,
             cachedInputTokens: tokenUsage.total.cachedInputTokens,
+            cacheReadInputTokens: tokenUsage.total.cachedInputTokens,
+            ...(tokenUsage.total.cacheWriteInputTokens === undefined
+              ? {}
+              : {
+                  cacheWriteInputTokens: tokenUsage.total.cacheWriteInputTokens,
+                }),
             outputTokens: tokenUsage.total.outputTokens,
             reasoningOutputTokens: tokenUsage.total.reasoningOutputTokens,
           },
@@ -1237,6 +1244,12 @@ export function translateCodexEventToDeltas(
             totalTokens: tokenUsage.last.totalTokens,
             inputTokens: tokenUsage.last.inputTokens,
             cachedInputTokens: tokenUsage.last.cachedInputTokens,
+            cacheReadInputTokens: tokenUsage.last.cachedInputTokens,
+            ...(tokenUsage.last.cacheWriteInputTokens === undefined
+              ? {}
+              : {
+                  cacheWriteInputTokens: tokenUsage.last.cacheWriteInputTokens,
+                }),
             outputTokens: tokenUsage.last.outputTokens,
             reasoningOutputTokens: tokenUsage.last.reasoningOutputTokens,
           },

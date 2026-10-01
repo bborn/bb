@@ -20,6 +20,15 @@ interface ResolveBuiltinPluginRootPathArgs {
 
 export const BUILTIN_PLUGINS_DIRECTORY_NAME = "builtin-plugins";
 
+const ACCOUNT_POOL_PARENT_URL_ENV = "BB_ACCOUNT_POOL_PARENT_URL";
+
+export function accountPoolDefaultEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const value = env[ACCOUNT_POOL_PARENT_URL_ENV];
+  return typeof value === "string" && value.length > 0;
+}
+
 const REPO_PLUGINS_DIRECTORY_NAME = "plugins";
 
 export const BUILTIN_PLUGINS = [
@@ -31,7 +40,7 @@ export const BUILTIN_PLUGINS = [
   {
     name: "account-pool",
     pluginId: "account-pool",
-    defaultEnabled: false,
+    defaultEnabled: accountPoolDefaultEnabled(),
   },
   {
     name: "ask-user-question",
@@ -106,7 +115,7 @@ export const BUILTIN_PLUGINS = [
   {
     name: "provider-usage",
     pluginId: "provider-usage",
-    defaultEnabled: false,
+    defaultEnabled: true,
   },
   {
     name: "provider-acp",
@@ -139,9 +148,29 @@ export const BUILTIN_PLUGINS = [
     defaultEnabled: true,
   },
   {
+    name: "drafts",
+    pluginId: "drafts",
+    defaultEnabled: true,
+  },
+  {
+    name: "thread-list",
+    pluginId: "thread-list",
+    defaultEnabled: true,
+  },
+  {
+    name: "navigation",
+    pluginId: "navigation",
+    defaultEnabled: true,
+  },
+  {
     name: "scheduled-send",
     pluginId: "scheduled-send",
     defaultEnabled: true,
+  },
+  {
+    name: "agent-annotations",
+    pluginId: "agent-annotations",
+    defaultEnabled: false,
   },
   {
     name: "concurrency-limit",
@@ -203,6 +232,11 @@ export const OFFICIAL_PLUGINS = [
   ...plugin,
   autoInstall: false,
 }));
+
+export const AUTOMATIC_AI_SERVICE_PLUGIN_IDS: readonly string[] = [
+  "provider-codex",
+  "bb-ai",
+];
 
 export const BUNDLED_PLUGINS: readonly BundledPluginDefinition[] = [
   ...BUILTIN_PLUGINS,

@@ -4,11 +4,11 @@ import {
   PLUGIN_CLI_OUTPUT_MAX_BYTES,
   type BbPluginApi,
   type PluginAgentConfigurationContext,
-  type PluginAgentToolPresentation,
+  type PluginRowPresentation,
 } from "../../backend-contract.js";
 import { defineRpcContract } from "../../rpc-contract.js";
 import {
-  parsePluginAgentToolPresentation,
+  parsePluginRowPresentation,
   PLUGIN_AGENT_STATUS_LABEL_MAX_CHARS,
   RESERVED_BB_CLI_COMMANDS,
 } from "../../internal/host-policy.js";
@@ -79,15 +79,17 @@ describe("fixtures", () => {
   it("keeps queued messages on the dispatch context thread by default", () => {
     const inherited = makeMessageDispatchHookContext({
       thread: { id: "thread-target" },
-      queuedMessage: { id: "queued-target" },
+      queuedMessages: [{ id: "queued-target" }, { id: "queued-second" }],
     });
     const explicit = makeMessageDispatchHookContext({
       thread: { id: "thread-target" },
-      queuedMessage: { threadId: "thread-explicit" },
+      queuedMessages: [{ threadId: "thread-explicit" }],
     });
 
-    expect(inherited.queuedMessage?.threadId).toBe("thread-target");
-    expect(explicit.queuedMessage?.threadId).toBe("thread-explicit");
+    expect(inherited.queuedMessages.map((message) => message.threadId)).toEqual(
+      ["thread-target", "thread-target"],
+    );
+    expect(explicit.queuedMessages[0]?.threadId).toBe("thread-explicit");
   });
 });
 
@@ -1296,7 +1298,7 @@ describe("agent tools", () => {
 
   it("rejects a presentation with the production host's exact messages", () => {
     const { bb } = createFakePluginHost();
-    const register = (presentation: PluginAgentToolPresentation) =>
+    const register = (presentation: PluginRowPresentation) =>
       bb.agents.registerTool({
         name: "lookup_doc",
         description: "Look up a doc",
@@ -1348,7 +1350,7 @@ describe("agent tools", () => {
     });
     const recorded = harness.registrations.agentTools[0]?.presentation;
     expect(recorded).toEqual(
-      parsePluginAgentToolPresentation("lookup_doc", declared),
+      parsePluginRowPresentation('tool "lookup_doc"', declared),
     );
     expect(recorded).toEqual({
       label: { pending: "Looking up a doc", completed: "Looked up a doc" },
@@ -1662,6 +1664,29 @@ describe("dispose", () => {
     );
     expect(oldDatabase.open).toBe(false);
     await replacement.harness.dispose();
+  });
+
+  it("runs install handlers in order and isolates a throwing one", async () => {
+    const { bb, harness } = createFakePluginHost();
+    const order: string[] = [];
+    bb.onInstall(() => {
+      order.push("first");
+      throw new Error("install exploded");
+    });
+    bb.onInstall(async () => {
+      order.push("second");
+    });
+
+    await harness.lifecycle.install();
+
+    expect(order).toEqual(["first", "second"]);
+    expect(harness.logEntries).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        message: "install handler failed: install exploded",
+      }),
+    );
+    await harness.dispose();
   });
 
   it("aborts services, runs hooks LIFO, closes the database, and poisons the handle", async () => {
@@ -2041,29 +2066,41 @@ describe("providers.experimental_contributeEnv", () => {
 });
 
 describe("experimental_aiServices.register", () => {
-  const declaration = {
-    id: "acme-ai",
-    displayName: "Acme AI",
-    kinds: ["inference" as const],
-  };
+  const complete = async (prompt: string) => `echo: ${prompt}`;
 
-  it("refuses the ids the server serves directly, like production", () => {
-    const { bb } = createFakePluginHost();
-    for (const id of ["openai", "anthropic"]) {
-      expect(() =>
-        bb.experimental_aiServices.register({ ...declaration, id }),
-      ).toThrow(/is reserved: the server serves it directly/u);
-    }
-    expect(() =>
-      bb.experimental_aiServices.register(declaration),
-    ).not.toThrow();
+  it("records the validated service and removes it on dispose", async () => {
+    const { bb, harness } = createFakePluginHost({
+      experimental_hostEntry: false,
+    });
+    const registration = bb.experimental_aiServices.register({
+      id: "acme-ai",
+      displayName: "  Acme AI  ",
+      complete,
+    });
+    expect(harness.registrations.aiServiceRegistrations).toHaveLength(1);
+    const [service] = harness.registrations.aiServiceRegistrations;
+    expect(service?.displayName).toBe("Acme AI");
+    await expect(
+      service?.complete?.("hi", { signal: new AbortController().signal }),
+    ).resolves.toBe("echo: hi");
+    registration.dispose();
+    expect(harness.registrations.aiServiceRegistrations).toEqual([]);
   });
 
-  it("refuses a plugin that declares no bb.host entry, like production", () => {
-    const { bb } = createFakePluginHost({ experimental_hostEntry: false });
-    expect(() => bb.experimental_aiServices.register(declaration)).toThrow(
-      /needs a bb\.host entry to run on: this plugin declares none/u,
-    );
+  it("refuses a second service with the same id", () => {
+    const { bb } = createFakePluginHost();
+    bb.experimental_aiServices.register({
+      id: "acme-ai",
+      displayName: "Acme AI",
+      complete,
+    });
+    expect(() =>
+      bb.experimental_aiServices.register({
+        id: "acme-ai",
+        displayName: "Acme AI again",
+        complete,
+      }),
+    ).toThrow(/already registered/u);
   });
 });
 

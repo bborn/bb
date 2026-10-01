@@ -6,12 +6,15 @@ import {
   useMemo,
   useRef,
   useState,
+  type ComponentPropsWithoutRef,
   type ReactNode,
+  type Ref,
 } from "react";
 import {
   isRawThreadId,
   RAW_THREAD_ID_PATTERN_SOURCE,
   type PromptMentionResource,
+  type PromptTextMention,
   type ThreadListEntry,
 } from "@bb/domain";
 import { QueryClientContext } from "@tanstack/react-query";
@@ -24,6 +27,7 @@ import { useThread } from "@/hooks/queries/thread-queries";
 import { threadQueryKey } from "@/hooks/queries/query-keys";
 import { sdk } from "@/lib/sdk";
 import { getThreadDisplayTitle } from "@/lib/thread-title";
+import { cn } from "@bb/shared-ui/lib/utils";
 
 type ThreadTitleMentionThread = Pick<
   ThreadListEntry,
@@ -637,6 +641,28 @@ function threadTitleTextSegments(
   return segments;
 }
 
+export function resolveSerializedPromptMentions(
+  text: string,
+  resources: ThreadTitleMentionResources,
+): PromptTextMention[] {
+  const mentions: PromptTextMention[] = [];
+  let cursor = 0;
+  for (const segment of threadTitleTextSegments(text, resources)) {
+    const token = segment.serializedText ?? segment.text;
+    const end = cursor + token.length;
+    if (/^@(?:thread|project|section):/u.test(token)) {
+      const resource =
+        segment.resource ??
+        (segment.unresolvedThreadId === null
+          ? null
+          : unresolvedThreadMentionResource(segment.unresolvedThreadId));
+      if (resource !== null) mentions.push({ start: cursor, end, resource });
+    }
+    cursor = end;
+  }
+  return mentions;
+}
+
 export function resolveThreadTitleDisplayText(
   title: string,
   resources: ThreadTitleMentionResources,
@@ -644,6 +670,14 @@ export function resolveThreadTitleDisplayText(
   return threadTitleTextSegments(title, resources)
     .map((segment) => segment.text)
     .join("");
+}
+
+export function useResolveThreadTitle(): (title: string) => string {
+  const resources = useContext(ThreadTitleMentionResourcesContext);
+  return useCallback(
+    (title: string) => resolveThreadTitleDisplayText(title, resources),
+    [resources],
+  );
 }
 
 function useUnavailableRawThreadMentionIds(): ReadonlySet<string> {
@@ -841,10 +875,54 @@ function ResolvingThreadTitleMention({
   );
 }
 
-function ThreadTitleMentionsContent({ title }: { title: string }) {
+interface ThreadTitleHighlightRange {
+  start: number;
+  end: number;
+}
+
+const THREAD_TITLE_HIGHLIGHT_CLASS =
+  "rounded-sm bg-[var(--sidebar-search-match)] px-0.5 py-px text-foreground";
+
+function highlightedText(
+  text: string,
+  offset: number,
+  ranges: readonly ThreadTitleHighlightRange[],
+): ReactNode {
+  const nodes: ReactNode[] = [];
+  let cursor = 0;
+  for (const range of ranges) {
+    const start = Math.max(cursor, Math.min(range.start - offset, text.length));
+    const end = Math.max(start, Math.min(range.end - offset, text.length));
+    if (end <= start) continue;
+    if (start > cursor) nodes.push(text.slice(cursor, start));
+    nodes.push(
+      <mark key={`${start}:${end}`} className={THREAD_TITLE_HIGHLIGHT_CLASS}>
+        {text.slice(start, end)}
+      </mark>,
+    );
+    cursor = end;
+  }
+  if (nodes.length === 0) return text;
+  if (cursor < text.length) nodes.push(text.slice(cursor));
+  return nodes;
+}
+
+interface ThreadTitleMentionsProps {
+  title: string;
+  highlightRanges?: readonly ThreadTitleHighlightRange[];
+}
+
+function ThreadTitleMentionsContent({
+  title,
+  highlightRanges = [],
+}: ThreadTitleMentionsProps) {
   const resources = useContext(ThreadTitleMentionResourcesContext);
-  return threadTitleTextSegments(title, resources).map((segment, index) =>
-    segment.unresolvedThreadId !== null && segment.serializedText !== null ? (
+  let offset = 0;
+  return threadTitleTextSegments(title, resources).map((segment, index) => {
+    const segmentOffset = offset;
+    offset += (segment.serializedText ?? segment.text).length;
+    return segment.unresolvedThreadId !== null &&
+      segment.serializedText !== null ? (
       <ResolvingThreadTitleMention
         key={`${index}:${segment.unresolvedThreadId}`}
         renderFallbackPill={segment.serializedText.startsWith("@thread:")}
@@ -853,7 +931,7 @@ function ThreadTitleMentionsContent({ title }: { title: string }) {
       />
     ) : segment.resource === null || segment.serializedText === null ? (
       <span key={`${index}:text`} className="truncate whitespace-pre">
-        {segment.text}
+        {highlightedText(segment.text, segmentOffset, highlightRanges)}
       </span>
     ) : (
       <PromptMentionPill
@@ -862,14 +940,51 @@ function ThreadTitleMentionsContent({ title }: { title: string }) {
         resource={segment.resource}
         serializedText={segment.serializedText}
       />
-    ),
+    );
+  });
+}
+
+export function ThreadTitleMentions({
+  title,
+  highlightRanges,
+}: ThreadTitleMentionsProps) {
+  return (
+    <RawThreadMentionBatchProvider>
+      <ThreadTitleMentionsContent
+        title={title}
+        highlightRanges={highlightRanges}
+      />
+    </RawThreadMentionBatchProvider>
   );
 }
 
-export function ThreadTitleMentions({ title }: { title: string }) {
+interface ThreadTitleProps extends Omit<
+  ComponentPropsWithoutRef<"span">,
+  "children" | "title"
+> {
+  title: string;
+  inline?: boolean;
+  tooltip?: boolean;
+  highlightRanges?: readonly ThreadTitleHighlightRange[];
+  ref?: Ref<HTMLSpanElement>;
+}
+
+export function ThreadTitle({
+  title,
+  inline = false,
+  tooltip = false,
+  highlightRanges,
+  className,
+  ...spanProps
+}: ThreadTitleProps) {
+  const displayTitle = useThreadTitleDisplayText(title);
   return (
-    <RawThreadMentionBatchProvider>
-      <ThreadTitleMentionsContent title={title} />
-    </RawThreadMentionBatchProvider>
+    <span
+      {...spanProps}
+      className={cn(!inline && "bb-thread-title", className)}
+      title={tooltip ? displayTitle : undefined}
+    >
+      <ThreadTitleMentions title={title} highlightRanges={highlightRanges} />
+    </span>
   );
 }

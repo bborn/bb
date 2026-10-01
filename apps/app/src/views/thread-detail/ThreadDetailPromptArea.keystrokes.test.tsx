@@ -33,11 +33,6 @@ const mocks = vi.hoisted(() => ({
   updateQueuedMessageMutateAsync: vi.fn(),
 }));
 
-vi.mock("react-router-dom", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("react-router-dom")>();
-  return { ...actual, useNavigate: () => vi.fn() };
-});
-
 vi.mock("@/components/promptbox/FollowUpPromptBox", () => ({
   FollowUpPromptBox: ({
     composer,
@@ -165,7 +160,7 @@ vi.mock("@/hooks/useCommandSuggestions", () => ({
     isLoadingMore: false,
     loadMore: vi.fn(),
     suggestions: [],
-    trigger: null,
+    triggers: [],
   }),
 }));
 
@@ -241,6 +236,11 @@ vi.mock("@/hooks/mutations/thread-runtime-mutations", () => {
 });
 
 vi.mock("@/hooks/mutations/thread-state-mutations", () => ({
+  useRestoreThreadEnvironment: () => ({
+    isPending: false,
+    mutate: vi.fn(),
+    variables: null,
+  }),
   useUnarchiveThread: () => ({
     isPending: false,
     mutate: vi.fn(),
@@ -372,6 +372,7 @@ function buildPromptArea({
         childThreadsSection={null}
         composerFocusRequestNonce={0}
         contextBannerMergeBase={null}
+        canRestoreEnvironment={false}
         environmentGoneStatus={null}
         goal={null}
         modelFallback={null}

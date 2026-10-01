@@ -18,6 +18,7 @@ import {
   filterRequestHeaders,
   mountedUpstreamUrl,
   oauthSecretDueForRefresh,
+  parseOAuthRefreshResponse,
 } from "./provider-adapter.js";
 import { epochMilliseconds } from "./quota.js";
 
@@ -184,6 +185,7 @@ const usageWindowSchema = z
 
 const usageResponseSchema = z
   .object({
+    plan_type: z.string().trim().min(1).nullish().catch(null),
     rate_limit: z
       .object({
         primary_window: usageWindowSchema.nullish(),
@@ -313,14 +315,13 @@ export function createCodexAdapter(options: {
     async refreshSecret(context) {
       const secret = oauthSecretDueForRefresh(context);
       if (secret === null) return { secret: context.secret, refreshed: false };
-      const parsed = refreshResponseSchema.parse(
-        JSON.parse(
-          await fetchOAuthRefresh(context, options.refreshUrl, {
-            client_id: CODEX_OAUTH_CLIENT_ID,
-            grant_type: "refresh_token",
-            refresh_token: secret.refreshToken,
-          }),
-        ),
+      const parsed = parseOAuthRefreshResponse(
+        await fetchOAuthRefresh(context, options.refreshUrl, {
+          client_id: CODEX_OAUTH_CLIENT_ID,
+          grant_type: "refresh_token",
+          refresh_token: secret.refreshToken,
+        }),
+        refreshResponseSchema,
       );
       const refreshed: AccountSecret = {
         kind: "oauth",
@@ -354,9 +355,19 @@ export function createCodexAdapter(options: {
         await response.body?.cancel();
         return;
       }
+      const parsed = usageResponseSchema.safeParse(
+        await response.json().catch(() => null),
+      );
+      if (!parsed.success) return;
+      if (parsed.data.plan_type != null) {
+        await context.accounts.setSubscriptionType(
+          context.account.id,
+          parsed.data.plan_type,
+        );
+      }
       const quota = codexQuotaFromUsage(
         context.account.id,
-        await response.json().catch(() => null),
+        parsed.data,
         context.quotas.get(context.account.id),
         context.now(),
       );

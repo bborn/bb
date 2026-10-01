@@ -237,6 +237,14 @@ function systemMessageTitleSegments(
       return subject !== null && subject.kind === "thread-batch"
         ? [verbSegment(`${subject.count} threads updated`)]
         : SYSTEM_MESSAGE_FALLBACK_SEGMENTS;
+    case "tool-result-delivered":
+      return subject !== null && subject.kind === "tool-call"
+        ? [
+            verbSegment("Delivered"),
+            subjectSegment(subject.toolName, null),
+            verbSegment("result"),
+          ]
+        : SYSTEM_MESSAGE_FALLBACK_SEGMENTS;
     case "unlabeled":
       return SYSTEM_MESSAGE_FALLBACK_SEGMENTS;
   }
@@ -322,6 +330,8 @@ function systemMessageIconName(systemMessageKind: SystemMessageKind): IconName {
       return "AlertCircle";
     case "child-outcome-batch":
       return "ListTodo";
+    case "tool-result-delivered":
+      return "Toolbox";
     case "unlabeled":
       return "Info";
   }
@@ -562,6 +572,7 @@ export const GeneratedConversationMessage = memo(
             <div ref={setCollapsedPreviewTextRef} className="min-w-0 truncate">
               {collapsedPreviewSource.parseAsMarkdown ? (
                 <MarkdownPreview
+                  allowHtml
                   content={collapsedPreviewMarkdown}
                   imagePolicy={
                     suppressGeneratedAgentImages ? "alt-text" : "render"
@@ -602,6 +613,7 @@ export const GeneratedConversationMessage = memo(
           <div className="pl-2 text-sm leading-relaxed text-foreground">
             {messageText ? (
               <MarkdownPreview
+                allowHtml
                 content={messageText}
                 imagePolicy={
                   suppressGeneratedAgentImages ? "alt-text" : "render"

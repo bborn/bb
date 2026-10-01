@@ -1,7 +1,20 @@
-import { type MachineEnvironmentList } from "./api/machine-environment.js";
+import {
+  machineEnvironmentSetSchema,
+  machineEnvironmentDeleteSchema,
+  type MachineEnvironmentSet,
+  type MachineEnvironmentDelete,
+  type ProjectMachineEnvironmentList,
+  type MachineEnvironmentList,
+} from "./api/machine-environment.js";
 import {
   machineEnvironmentReplaceSchema,
+  setAiServiceSelectionRequestSchema,
+  testAiServiceRequestSchema,
   type MachineEnvironmentReplace,
+  type SetAiServiceSelectionRequest,
+  type SystemAiServicesResponse,
+  type TestAiServiceRequest,
+  type TestAiServiceResponse,
 } from "./api/system.js";
 import {
   desktopBrowserHostRequestSchema,
@@ -113,6 +126,7 @@ import type {
   HostDirectoryListing,
   HostDirectoryQuery,
   HostEnrollmentCommandResponse,
+  HostReconnectResponse,
   HostListQuery,
   HostActionResponse,
   HostCloneDefaultPathQuery,
@@ -194,6 +208,10 @@ import type {
   SystemProvidersQuery,
   SystemProviderStatesResponse,
   SystemUsageLimitsQuery,
+  SystemAppUpdateAcknowledgeRequest,
+  SystemAppUpdateApplyRequest,
+  SystemAppUpdateQuery,
+  SystemAppUpdateStatus,
   SystemVersionQuery,
   SystemVersionResponse,
   SystemVoiceTranscriptionForm,
@@ -342,6 +360,9 @@ import {
   systemProvidersQuerySchema,
   systemUsageLimitsQuerySchema,
   systemVersionQuerySchema,
+  systemAppUpdateAcknowledgeRequestSchema,
+  systemAppUpdateApplyRequestSchema,
+  systemAppUpdateQuerySchema,
   threadEventWaitQuerySchema,
   threadEventsQuerySchema,
   threadFilesRawQuerySchema,
@@ -373,6 +394,16 @@ import {
   updateProjectSourceRequestSchema,
   updateThreadRequestSchema,
 } from "./api-types.js";
+import {
+  serverMoveCheckRequestSchema,
+  serverMoveStartRequestSchema,
+  type DeleteOldServerCopyResponse,
+  type ServerMoveCheckRequest,
+  type ServerMoveCheckResponse,
+  type ServerMoveStartRequest,
+  type ServerMoveStatus,
+  type ServerMoveStatusResponse,
+} from "./api/server-move.js";
 import type { ApiError } from "./errors.js";
 
 type PathProjectSourceId = { param: { id: string; sourceId: string } };
@@ -382,6 +413,37 @@ type PathThreadInteractionId = {
 
 export const publicApiRoutes = {
   projects: {
+    machineEnvironment: defineRoute({
+      path: "/projects/:id/machine-environment",
+      method: "get",
+      request: noRequest<PathProjectId>(),
+      response: jsonResponse<ProjectMachineEnvironmentList>(),
+    }),
+    replaceMachineEnvironment: defineRoute({
+      path: "/projects/:id/machine-environment",
+      method: "put",
+      request: jsonRequest<PathProjectId, MachineEnvironmentReplace>(
+        machineEnvironmentReplaceSchema,
+      ),
+      response: jsonResponse<ProjectMachineEnvironmentList>(),
+    }),
+    setMachineEnvironmentVariable: defineRoute({
+      path: "/projects/:id/machine-environment",
+      method: "post",
+      request: jsonRequest<PathProjectId, MachineEnvironmentSet>(
+        machineEnvironmentSetSchema,
+      ),
+      response: jsonResponse<ProjectMachineEnvironmentList>(),
+    }),
+    deleteMachineEnvironmentVariable: defineRoute({
+      path: "/projects/:id/machine-environment",
+      method: "delete",
+      request: jsonRequest<PathProjectId, MachineEnvironmentDelete>(
+        machineEnvironmentDeleteSchema,
+      ),
+      response: jsonResponse<ProjectMachineEnvironmentList>(),
+    }),
+
     list: defineRoute({
       path: "/projects",
       method: "get",
@@ -790,6 +852,12 @@ export const publicApiRoutes = {
       request: noRequest<PathId>(),
       response: jsonResponse<HostEnrollmentCommandResponse>(),
     }),
+    reconnect: defineRoute({
+      path: "/hosts/:id/reconnect-commands",
+      method: "post",
+      request: noRequest<PathId>(),
+      response: jsonResponse<HostReconnectResponse>({ status: 201 }),
+    }),
     update: defineRoute({
       path: "/hosts/:id",
       method: "patch",
@@ -809,6 +877,12 @@ export const publicApiRoutes = {
       method: "post",
       request: noRequest<PathId>(),
       response: jsonResponse<HostRetryUpdateResponse>(),
+    }),
+    reconcile: defineRoute({
+      path: "/hosts/:id/reconcile",
+      method: "post",
+      request: noRequest<PathId>(),
+      response: jsonResponse<Host, 202>({ status: 202 }),
     }),
     suspend: defineRoute({
       path: "/hosts/:id/suspend",
@@ -879,6 +953,48 @@ export const publicApiRoutes = {
         hostProviderCliInstallRequestSchema,
       ),
       response: textResponse<HostProviderCliInstallEvent>(),
+    }),
+    deleteOldServerCopy: defineRoute({
+      path: "/hosts/:id/old-server-copy",
+      method: "delete",
+      request: noRequest<PathId>(),
+      response: jsonResponse<DeleteOldServerCopyResponse>(),
+    }),
+  },
+  server: {
+    checkMove: defineRoute({
+      path: "/server/move/check",
+      method: "post",
+      request: jsonRequest<EmptyInput, ServerMoveCheckRequest>(
+        serverMoveCheckRequestSchema,
+      ),
+      response: jsonResponse<ServerMoveCheckResponse>(),
+    }),
+    startMove: defineRoute({
+      path: "/server/move",
+      method: "post",
+      request: jsonRequest<EmptyInput, ServerMoveStartRequest>(
+        serverMoveStartRequestSchema,
+      ),
+      response: jsonResponse<ServerMoveStatus>(),
+    }),
+    moveStatus: defineRoute({
+      path: "/server/move",
+      method: "get",
+      request: noRequest(),
+      response: jsonResponse<ServerMoveStatusResponse>(),
+    }),
+    cancelMove: defineRoute({
+      path: "/server/move/cancel",
+      method: "post",
+      request: noRequest(),
+      response: jsonResponse<ServerMoveStatus>(),
+    }),
+    export: defineRoute({
+      path: "/server/export",
+      method: "post",
+      request: noRequest(),
+      response: binaryResponse<Uint8Array>(),
     }),
   },
 
@@ -1074,6 +1190,12 @@ export const publicApiRoutes = {
   },
 
   threadSections: {
+    list: defineRoute({
+      path: "/thread-sections",
+      method: "get",
+      request: noRequest<EmptyInput>(),
+      response: jsonResponse<ThreadSectionResponse[]>(),
+    }),
     create: defineRoute({
       path: "/thread-sections",
       method: "post",
@@ -1447,6 +1569,21 @@ export const publicApiRoutes = {
       request: noRequest<PathId>(),
       response: jsonResponse<{ ok: true }>(),
     }),
+    /**
+     * Ask the environment provider to restore a thread's destroyed environment
+     * and attach the result; the provider decides what restoring means, such
+     * as checking the recorded branch out again. Sends to such a thread fail
+     * until this runs. Answers
+     * the thread as it now stands — `starting`, with provisioning underway —
+     * and starts no turn: the thread settles back to `idle` once the workspace
+     * is ready. Refused unless `canRestoreEnvironment` is true.
+     */
+    restoreEnvironment: defineRoute({
+      path: "/threads/:id/restore-environment",
+      method: "post",
+      request: noRequest<PathId>(),
+      response: jsonResponse<ThreadResponse>(),
+    }),
     read: defineRoute({
       path: "/threads/:id/read",
       method: "post",
@@ -1594,6 +1731,23 @@ export const publicApiRoutes = {
   },
 
   system: {
+    setMachineEnvironmentVariable: defineRoute({
+      path: "/settings/machine-environment",
+      method: "post",
+      request: jsonRequest<EmptyInput, MachineEnvironmentSet>(
+        machineEnvironmentSetSchema,
+      ),
+      response: jsonResponse<MachineEnvironmentList>(),
+    }),
+    deleteMachineEnvironmentVariable: defineRoute({
+      path: "/settings/machine-environment",
+      method: "delete",
+      request: jsonRequest<EmptyInput, MachineEnvironmentDelete>(
+        machineEnvironmentDeleteSchema,
+      ),
+      response: jsonResponse<MachineEnvironmentList>(),
+    }),
+
     machineEnvironment: defineRoute({
       path: "/settings/machine-environment",
       method: "get",
@@ -1619,6 +1773,28 @@ export const publicApiRoutes = {
       method: "get",
       request: noRequest(),
       response: jsonResponse<SystemConfigResponse>(),
+    }),
+    aiServices: defineRoute({
+      path: "/system/ai-services",
+      method: "get",
+      request: noRequest(),
+      response: jsonResponse<SystemAiServicesResponse>(),
+    }),
+    setAiServiceSelection: defineRoute({
+      path: "/system/ai-services/selection",
+      method: "put",
+      request: jsonRequest<EmptyInput, SetAiServiceSelectionRequest>(
+        setAiServiceSelectionRequestSchema,
+      ),
+      response: jsonResponse<SystemAiServicesResponse>(),
+    }),
+    testAiService: defineRoute({
+      path: "/system/ai-services/test",
+      method: "post",
+      request: jsonRequest<EmptyInput, TestAiServiceRequest>(
+        testAiServiceRequestSchema,
+      ),
+      response: jsonResponse<TestAiServiceResponse>(),
     }),
     generalSettings: defineRoute({
       path: "/settings/general",
@@ -1785,6 +1961,30 @@ export const publicApiRoutes = {
         systemVersionQuerySchema,
       ),
       response: jsonResponse<SystemVersionResponse>(),
+    }),
+    appUpdate: defineRoute({
+      path: "/system/app-update",
+      method: "get",
+      request: optionalQueryRequest<EmptyInput, SystemAppUpdateQuery>(
+        systemAppUpdateQuerySchema,
+      ),
+      response: jsonResponse<SystemAppUpdateStatus>(),
+    }),
+    applyAppUpdate: defineRoute({
+      path: "/system/app-update/apply",
+      method: "post",
+      request: jsonRequest<EmptyInput, SystemAppUpdateApplyRequest>(
+        systemAppUpdateApplyRequestSchema,
+      ),
+      response: jsonResponse<SystemAppUpdateStatus>(),
+    }),
+    acknowledgeAppUpdate: defineRoute({
+      path: "/system/app-update/acknowledge",
+      method: "post",
+      request: jsonRequest<EmptyInput, SystemAppUpdateAcknowledgeRequest>(
+        systemAppUpdateAcknowledgeRequestSchema,
+      ),
+      response: jsonResponse<SystemAppUpdateStatus>(),
     }),
   },
 };

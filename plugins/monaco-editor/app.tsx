@@ -14,7 +14,7 @@ import {
   setOverflowWidgetsTheme,
 } from "./lib/monaco-loader.js";
 import { applyCodeTheme, editorBackground } from "./lib/monaco-theme.js";
-import { cn } from "@bb/shared-ui/lib/utils";
+import { cn } from "@/lib/utils";
 import { FileToolbar, type SaveIndicator } from "./components/FileToolbar.js";
 import { FileTreePanel } from "./components/FileTreePanel.js";
 import type { FlatEntry } from "./lib/file-tree.js";
@@ -496,7 +496,7 @@ export default definePluginApp((app) => {
   });
 
   for (const command of EDITOR_COMMANDS) {
-    app.slots.commandPaletteAction({
+    app.commands.register({
       id: command.id,
       title: command.title,
       isAvailable: () => isCommandAvailable(command),

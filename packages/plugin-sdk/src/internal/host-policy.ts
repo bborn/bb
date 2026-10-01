@@ -13,6 +13,10 @@ import {
 } from "@bb/domain/plugin-interaction-limits";
 import { PROVIDER_FORK_VALUES } from "@bb/domain/provider-fork";
 import {
+  COMPLETED_TURN_DISPLAY_VALUES,
+  DEFAULT_COMPLETED_TURN_DISPLAY,
+} from "@bb/domain/completed-turn-display";
+import {
   jsonValueSchema,
   normalizeProviderNativeRoots,
   providerNativeRootsInputSchema,
@@ -22,10 +26,9 @@ import {
 import { PLUGIN_CLI_OUTPUT_MAX_BYTES } from "../backend-contract.js";
 import type {
   PluginAgentToolContext,
-  PluginAgentToolPresentation,
+  PluginRowPresentation,
   PluginAgentToolResult,
   PluginAiServiceDeclaration,
-  PluginAiServiceKind,
   PluginCliCommandInfo,
   PluginCliExecutionResult,
   PluginCliOutputLimitError,
@@ -41,6 +44,7 @@ import type {
   ServerAccessProviderDeclaration,
   PluginProviderCapabilities,
   PluginProviderComposerAction,
+  PluginProviderCompletedTurnDisplay,
   PluginProviderDeclaration,
   ExperimentalPluginProviderEnvEntry,
   PluginProviderExtensionKindDeclaration,
@@ -958,6 +962,27 @@ function validateProviderModelCatalogScope(
   return value as PluginProviderModelCatalogScope;
 }
 
+const PROVIDER_COMPLETED_TURN_DISPLAYS =
+  COMPLETED_TURN_DISPLAY_VALUES satisfies readonly PluginProviderCompletedTurnDisplay[];
+
+function validateProviderCompletedTurnDisplay(
+  providerId: string,
+  value: unknown,
+): PluginProviderCompletedTurnDisplay {
+  if (value === undefined) {
+    return DEFAULT_COMPLETED_TURN_DISPLAY;
+  }
+  if (
+    typeof value !== "string" ||
+    !(PROVIDER_COMPLETED_TURN_DISPLAYS as readonly string[]).includes(value)
+  ) {
+    throw new Error(
+      `provider "${providerId}" completedTurnDisplay must be one of ${PROVIDER_COMPLETED_TURN_DISPLAYS.join(", ")}`,
+    );
+  }
+  return value as PluginProviderCompletedTurnDisplay;
+}
+
 /**
  * Returns undefined when the declaration carries `models` for a
  * reason other than a fallback list — `scope` alone is a valid declaration.
@@ -1098,57 +1123,37 @@ function validateProviderFallbackModels(
   return Object.freeze(normalized);
 }
 
-const AI_SERVICE_KINDS = new Set<PluginAiServiceKind>(["inference", "voice"]);
-
 /**
- * AI-service ids the server serves itself: `openai` transcription and the
- * builtin inference providers (pi-ai 0.84). A plugin cannot register one —
- * it would capture the user's prompts and audio. This list is the one source
- * for both the fake host and production (`isServerDirectAiServiceId`);
- * apps/server/test/services/plugins/plugin-ai-services.test.ts pins it to
- * pi-ai's provider registry, so a pi-ai bump must move it in the same change.
+ * A validated `bb.experimental_aiServices.register` declaration. Absent
+ * functions are `null` so hosts never have to distinguish missing from
+ * undefined.
  */
-export const SERVER_DIRECT_AI_SERVICE_IDS: readonly string[] = Object.freeze([
-  "openai",
-  "amazon-bedrock",
-  "ant-ling",
-  "anthropic",
-  "azure-openai-responses",
-  "baseten",
-  "cerebras",
-  "cloudflare-ai-gateway",
-  "cloudflare-workers-ai",
-  "deepseek",
-  "fireworks",
-  "github-copilot",
-  "google",
-  "google-vertex",
-  "groq",
-  "huggingface",
-  "kimi-coding",
-  "minimax",
-  "minimax-cn",
-  "mistral",
-  "moonshotai",
-  "moonshotai-cn",
-  "nvidia",
-  "openai-codex",
-  "opencode",
-  "opencode-go",
-  "openrouter",
-  "qwen-token-plan",
-  "qwen-token-plan-cn",
-  "radius",
-  "together",
-  "vercel-ai-gateway",
-  "xai",
-  "xiaomi",
-  "xiaomi-token-plan-ams",
-  "xiaomi-token-plan-cn",
-  "xiaomi-token-plan-sgp",
-  "zai",
-  "zai-coding-cn",
+export interface NormalizedPluginAiService {
+  readonly id: string;
+  readonly displayName: string;
+  readonly complete: NonNullable<PluginAiServiceDeclaration["complete"]> | null;
+  readonly transcribe: NonNullable<
+    PluginAiServiceDeclaration["transcribe"]
+  > | null;
+  readonly status: NonNullable<PluginAiServiceDeclaration["status"]> | null;
+}
+
+const RESERVED_AI_SERVICE_IDS: ReadonlySet<string> = new Set([
+  "automatic",
+  "off",
 ]);
+
+function optionalAiServiceFunction<T>(
+  id: string,
+  name: string,
+  value: T | undefined,
+): T | null {
+  if (value === undefined) return null;
+  if (typeof value !== "function") {
+    throw new Error(`AI service "${id}" ${name} must be a function`);
+  }
+  return value;
+}
 
 /**
  * Validate one `bb.experimental_aiServices.register` declaration the same
@@ -1157,7 +1162,7 @@ export const SERVER_DIRECT_AI_SERVICE_IDS: readonly string[] = Object.freeze([
  */
 export function validatePluginAiServiceDeclaration(
   declaration: PluginAiServiceDeclaration,
-): PluginAiServiceDeclaration {
+): NormalizedPluginAiService {
   if (typeof declaration !== "object" || declaration === null) {
     throw new Error("AI service declaration must be an object");
   }
@@ -1167,6 +1172,11 @@ export function validatePluginAiServiceDeclaration(
       `invalid AI service id ${JSON.stringify(id)} — use 2-64 lowercase letters, digits, and "-", starting with a letter or digit`,
     );
   }
+  if (RESERVED_AI_SERVICE_IDS.has(id)) {
+    throw new Error(
+      `AI service id "${id}" is reserved: bb uses "automatic" and "off" as selection modes. Choose another id.`,
+    );
+  }
   const displayName =
     typeof declaration.displayName === "string"
       ? declaration.displayName.trim()
@@ -1174,84 +1184,28 @@ export function validatePluginAiServiceDeclaration(
   if (displayName.length === 0 || displayName.length > 64) {
     throw new Error(`AI service "${id}" displayName must be 1-64 characters`);
   }
-  const kinds = declaration.kinds;
-  if (!Array.isArray(kinds) || kinds.length === 0) {
-    throw new Error(`AI service "${id}" must declare at least one kind`);
-  }
-  const seen = new Set<PluginAiServiceKind>();
-  for (const kind of kinds) {
-    if (
-      typeof kind !== "string" ||
-      !AI_SERVICE_KINDS.has(kind as PluginAiServiceKind)
-    ) {
-      throw new Error(
-        `AI service "${id}" kind ${JSON.stringify(kind)} is not one of: ${[...AI_SERVICE_KINDS].join(", ")}`,
-      );
-    }
-    if (seen.has(kind as PluginAiServiceKind)) {
-      throw new Error(`AI service "${id}" declares kind "${kind}" twice`);
-    }
-    seen.add(kind as PluginAiServiceKind);
-  }
-  return Object.freeze({
+  const complete = optionalAiServiceFunction(
     id,
-    displayName,
-    kinds: Object.freeze([...seen]),
-  });
-}
-
-/**
- * What an AI service binds to, decided at the
- * `bb.experimental_aiServices.register` call: the plugin's built `bb.host`
- * artifact, or — when the plugin declares an entry that failed to build —
- * nothing yet, with the build problem. An unbound service is staged so the
- * factory completes; the load then fails on that problem before the staged
- * registrations flush, so the service never goes live, while a provider the
- * same factory declared can still be retained as unavailable.
- */
-export type AiServiceHostBinding<THostArtifact> =
-  | { readonly artifact: THostArtifact; readonly problem: null }
-  | { readonly artifact: null; readonly problem: string };
-
-/**
- * The refusals a host makes at `bb.experimental_aiServices.register` before
- * it stages the declaration: a reserved server-direct id, and a plugin with
- * no `bb.host` entry for the service to run on. A plugin whose declared
- * entry failed to build is not refused here: the service is staged unbound,
- * carrying the build problem, so the load fails on that problem — the
- * actionable one — after the factory instead of at this call, and a
- * provider the same factory declares is listed as unavailable rather than
- * lost. Returns what the service binds to. The production host and the fake
- * host both call this, so they refuse identically;
- * apps/server/test/services/plugins/plugin-ai-services.test.ts pins the
- * messages.
- */
-export function assertAiServiceRegistrable<THostArtifact>(args: {
-  id: string;
-  /** The plugin's built `bb.host` artifact, or null when it has none. */
-  hostArtifact: THostArtifact | null;
-  /** Why the artifact is missing when the plugin declared an entry that failed to build. */
-  hostArtifactProblem: string | null;
-}): AiServiceHostBinding<THostArtifact> {
-  if (SERVER_DIRECT_AI_SERVICE_IDS.includes(args.id)) {
+    "complete",
+    declaration.complete,
+  );
+  const transcribe = optionalAiServiceFunction(
+    id,
+    "transcribe",
+    declaration.transcribe,
+  );
+  const status = optionalAiServiceFunction(id, "status", declaration.status);
+  if (complete === null && transcribe === null) {
     throw new Error(
-      `AI service id "${args.id}" is reserved: the server serves it directly, so a plugin cannot register it`,
+      `AI service "${id}" must declare complete, transcribe, or both`,
     );
   }
-  if (args.hostArtifact !== null) {
-    return { artifact: args.hostArtifact, problem: null };
-  }
-  if (args.hostArtifactProblem !== null) {
-    return { artifact: null, problem: args.hostArtifactProblem };
-  }
-  throw new Error(
-    `AI service "${args.id}" needs a bb.host entry to run on: this plugin declares none`,
-  );
+  return Object.freeze({ id, displayName, complete, transcribe, status });
 }
 
-/** The collision a second registration of a live AI-service id raises. */
+/** The collision a plugin's second registration of one AI-service id raises. */
 export function aiServiceAlreadyRegisteredMessage(id: string): string {
-  return `AI service "${id}" is already registered; a plugin cannot shadow an existing service.`;
+  return `AI service "${id}" is already registered by this plugin.`;
 }
 
 /** The collision a second registration of a live provider id raises. */
@@ -1283,6 +1237,7 @@ export type NormalizedPluginProviderDeclaration = Omit<
   readonly experimental_nativeSkillRoots?: ProviderNativeRoots;
   readonly experimental_nativeCommandRoots?: ProviderNativeRoots;
   readonly experimental_resolvesNativeRoots: boolean;
+  readonly completedTurnDisplay: PluginProviderCompletedTurnDisplay;
   readonly maintenance: {
     readonly health: boolean;
     readonly usage: boolean;
@@ -1523,6 +1478,10 @@ export function validatePluginProviderDeclaration(
     allowed: PLUGIN_PROVIDER_COMPOSER_ACTION_VALUES,
     requireNonEmpty: false,
   });
+  const completedTurnDisplay = validateProviderCompletedTurnDisplay(
+    id,
+    declaration.completedTurnDisplay,
+  );
   const bridgeOptions =
     declaration.experimental_bridgeOptions === undefined
       ? undefined
@@ -1627,6 +1586,7 @@ export function validatePluginProviderDeclaration(
     maintenance: normalizedMaintenance,
     capabilities: normalizedCapabilities,
     composerActions,
+    completedTurnDisplay,
     ...(strings === undefined ? {} : { strings: strings }),
     ...(serviceTiers === undefined ? {} : { serviceTiers: serviceTiers }),
     ...(reasoningLevels === undefined
@@ -1688,6 +1648,20 @@ export function isStandardSchema(value: unknown): value is StandardSchemaV1 {
   );
 }
 
+const rpcDescriptionSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(4096)
+  .optional()
+  .transform((value) => value ?? null);
+const rpcPublicationOptionsSchema = z
+  .object({
+    experimental_discoverable: z.boolean().default(false),
+    experimental_description: rpcDescriptionSchema,
+  })
+  .strict();
+
 function readRpcMethodContract(
   method: string,
   value: unknown,
@@ -1709,7 +1683,80 @@ function readRpcMethodContract(
       `rpc method "${method}" output must be a Standard Schema v1 validator`,
     );
   }
-  return { input, output };
+  const description = rpcDescriptionSchema.parse(
+    Reflect.get(value, "experimental_description"),
+  );
+  return description === null
+    ? { input, output }
+    : { input, output, experimental_description: description };
+}
+
+export function readRpcPublicationOptions(value: unknown) {
+  return rpcPublicationOptionsSchema.parse(value ?? {});
+}
+
+function publishedRpcSchema(
+  schema: StandardSchemaV1,
+  direction: "input" | "output",
+) {
+  const converter = schema["~standard"].jsonSchema;
+  if (converter === undefined || typeof converter[direction] !== "function") {
+    throw new Error(
+      "discoverable RPC requires Standard JSON Schema export support",
+    );
+  }
+  const serialized = JSON.stringify(
+    converter[direction]({ target: "draft-2020-12" }),
+  );
+  if (
+    serialized === undefined ||
+    new TextEncoder().encode(serialized).byteLength > 128 * 1024
+  ) {
+    throw new Error("published RPC schema must be JSON and at most 128 KiB");
+  }
+  const result = z
+    .record(z.string(), jsonValueSchema)
+    .parse(JSON.parse(serialized));
+  const inspect = (value: JsonValue): void => {
+    if (value === null || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      for (const item of value) inspect(item);
+      return;
+    }
+    for (const [key, item] of Object.entries(value)) {
+      if (
+        (key === "$ref" || key === "$dynamicRef") &&
+        typeof item === "string" &&
+        !item.startsWith("#")
+      ) {
+        throw new Error("published RPC schemas must use local references");
+      }
+      inspect(item);
+    }
+  };
+  inspect(result);
+  return result;
+}
+
+export function publishRpcMethod(
+  method: string,
+  contract: PluginRpcMethodContract,
+  options: ReturnType<typeof readRpcPublicationOptions>,
+) {
+  if (!options.experimental_discoverable) return null;
+  try {
+    return {
+      method,
+      registrationDescription: options.experimental_description,
+      methodDescription: contract.experimental_description ?? null,
+      inputSchema: publishedRpcSchema(contract.input, "input"),
+      outputSchema: publishedRpcSchema(contract.output, "output"),
+    };
+  } catch (error) {
+    throw new Error(
+      `rpc method "${method}" cannot be published: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }
 
 /** Duck-typed zod detection: plugin sources may carry their own zod copy,
@@ -1966,18 +2013,18 @@ function rejectStaleAgentToolFields(toolName: string, tool: object): void {
  * in a plugin unit test registers in bb, and one bb rejects is rejected
  * with the same message.
  */
-export function parsePluginAgentToolPresentation(
-  toolName: string,
+export function parsePluginRowPresentation(
+  subject: string,
   value: unknown,
-): PluginAgentToolPresentation | null {
+): PluginRowPresentation | null {
   if (value === undefined) {
     return null;
   }
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`tool "${toolName}" presentation must be an object`);
+    throw new Error(`${subject} presentation must be an object`);
   }
   const declared = value as Record<string, unknown>;
-  const presentation: PluginAgentToolPresentation = {};
+  const presentation: PluginRowPresentation = {};
   if (declared.label !== undefined) {
     const label = declared.label;
     if (
@@ -1987,7 +2034,7 @@ export function parsePluginAgentToolPresentation(
       typeof (label as { completed?: unknown }).completed !== "string"
     ) {
       throw new Error(
-        `tool "${toolName}" presentation.label must provide pending and completed strings`,
+        `${subject} presentation.label must provide pending and completed strings`,
       );
     }
     const { pending, completed } = label as {
@@ -2001,7 +2048,7 @@ export function parsePluginAgentToolPresentation(
       completed.length > PLUGIN_AGENT_STATUS_LABEL_MAX_CHARS
     ) {
       throw new Error(
-        `tool "${toolName}" presentation.label strings must be non-empty and at most ${PLUGIN_AGENT_STATUS_LABEL_MAX_CHARS} characters`,
+        `${subject} presentation.label strings must be non-empty and at most ${PLUGIN_AGENT_STATUS_LABEL_MAX_CHARS} characters`,
       );
     }
     presentation.label = { pending, completed };
@@ -2014,17 +2061,13 @@ export function parsePluginAgentToolPresentation(
       typeof (icon as { glyph?: unknown }).glyph !== "string" ||
       (icon as { glyph: string }).glyph.trim().length === 0
     ) {
-      throw new Error(
-        `tool "${toolName}" presentation.icon must be { glyph: string }`,
-      );
+      throw new Error(`${subject} presentation.icon must be { glyph: string }`);
     }
     presentation.icon = { glyph: (icon as { glyph: string }).glyph };
   }
   if (declared.suppress !== undefined) {
     if (typeof declared.suppress !== "boolean") {
-      throw new Error(
-        `tool "${toolName}" presentation.suppress must be a boolean`,
-      );
+      throw new Error(`${subject} presentation.suppress must be a boolean`);
     }
     presentation.suppress = declared.suppress;
   }
@@ -2037,7 +2080,7 @@ export function parsePluginAgentToolPresentation(
       typeof (tint as { dark?: unknown }).dark !== "string"
     ) {
       throw new Error(
-        `tool "${toolName}" presentation.tint must provide light and dark strings`,
+        `${subject} presentation.tint must provide light and dark strings`,
       );
     }
     presentation.tint = {
@@ -2344,7 +2387,13 @@ export interface NormalizedPluginEnvironmentProvider {
   validate: NonNullable<
     PluginEnvironmentProviderDeclaration["validate"]
   > | null;
+  experimental_existingPath: NonNullable<
+    PluginEnvironmentProviderDeclaration["experimental_existingPath"]
+  > | null;
   create: PluginEnvironmentProviderDeclaration["create"];
+  restore: NonNullable<
+    PluginEnvironmentProviderDeclaration["restore"]
+  > | null;
   remove: PluginEnvironmentProviderDeclaration["remove"];
   policy: import("../environment-provider.js").PluginEnvironmentProviderPolicy;
 }
@@ -2489,6 +2538,18 @@ export function validatePluginEnvironmentProviderDeclaration(
     declaration.availability,
     "availability",
   );
+  assertOptionalFunction(
+    "environment provider",
+    id,
+    declaration.experimental_existingPath,
+    "experimental_existingPath",
+  );
+  assertOptionalFunction(
+    "environment provider",
+    id,
+    declaration.restore,
+    "a restore",
+  );
   return {
     id,
     displayName,
@@ -2499,7 +2560,9 @@ export function validatePluginEnvironmentProviderDeclaration(
     inputsJsonSchema: inputs === null ? null : inputs.jsonSchema,
     availability: declaration.availability ?? null,
     validate: declaration.validate ?? null,
+    experimental_existingPath: declaration.experimental_existingPath ?? null,
     create: declaration.create,
+    restore: declaration.restore ?? null,
     remove: declaration.remove,
     policy: environmentProviderPolicySchema.parse(declaration.policy ?? {}),
   };
@@ -2792,6 +2855,7 @@ export function normalizeWebSocketRouteRegistration(
 }
 
 type RpcRegistrationRecord = {
+  publication: ReturnType<typeof publishRpcMethod>;
   inputSchema: StandardSchemaV1;
   outputSchema: StandardSchemaV1;
   handler: (input: unknown) => unknown;
@@ -2801,6 +2865,7 @@ export function normalizeRpcRegistration(
   contract: unknown,
   handlers: unknown,
   registered: ReadonlyMap<string, unknown>,
+  options: unknown,
 ): Array<[string, RpcRegistrationRecord]> {
   if (
     typeof contract !== "object" ||
@@ -2816,6 +2881,7 @@ export function normalizeRpcRegistration(
   ) {
     throw new Error("rpc.register handlers must be an object");
   }
+  const publicationOptions = readRpcPublicationOptions(options);
   const pending: Array<[string, RpcRegistrationRecord]> = [];
   const contractEntries = Object.entries(contract);
   const contractNames = new Set(contractEntries.map(([name]) => name));
@@ -2843,6 +2909,7 @@ export function normalizeRpcRegistration(
     pending.push([
       name,
       {
+        publication: publishRpcMethod(name, methodContract, publicationOptions),
         inputSchema: methodContract.input,
         outputSchema: methodContract.output,
         handler,
@@ -2932,6 +2999,7 @@ export function normalizeCliRegistration(
   name: string;
   summary: string;
   commands: PluginCliCommandInfo[];
+  rendersHelp: boolean;
   run: PluginCliRegistration["run"];
 } {
   if (alreadyRegistered) {
@@ -2979,6 +3047,7 @@ export function normalizeCliRegistration(
     name,
     summary: registration.summary,
     commands: validatedCommands,
+    rendersHelp: registration.rendersHelp === true,
     run: registration.run.bind(registration),
   };
 }
@@ -2999,7 +3068,7 @@ export function normalizeAgentToolRegistration(args: {
     name: string;
     description: string;
     instructions?: string;
-    presentation?: PluginAgentToolPresentation;
+    presentation?: PluginRowPresentation;
     parameters: unknown;
     execute(
       params: never,
@@ -3009,7 +3078,7 @@ export function normalizeAgentToolRegistration(args: {
 }): {
   name: string;
   description: string;
-  presentation: PluginAgentToolPresentation | null;
+  presentation: PluginRowPresentation | null;
   instructions: string | null;
   inputSchema: unknown;
   parse: AgentToolParse;
@@ -3048,8 +3117,8 @@ export function normalizeAgentToolRegistration(args: {
       `tool "${name}" instructions exceed the ${PLUGIN_AGENT_STATIC_INSTRUCTIONS_MAX_CHARS}-character limit`,
     );
   }
-  const presentation = parsePluginAgentToolPresentation(
-    name,
+  const presentation = parsePluginRowPresentation(
+    `tool "${name}"`,
     tool.presentation,
   );
   if (presentation?.icon !== undefined) {
@@ -3165,15 +3234,21 @@ export function normalizeMentionProviderRegistration(
   };
 }
 
-export function normalizeInteractionRequest(
-  request: PluginInteractionRequest,
-): {
+export interface NormalizedPluginInteractionRequest {
   threadId: string;
   rendererId: string;
   title: string;
   payload: JsonValue;
   timeoutMs: number;
-} {
+  presentation: PluginRowPresentation | null;
+  describeSubmission: NonNullable<
+    PluginInteractionRequest["describeSubmission"]
+  > | null;
+}
+
+export function normalizeInteractionRequest(
+  request: PluginInteractionRequest,
+): NormalizedPluginInteractionRequest {
   if (!request || typeof request !== "object") {
     throw new Error("ui.requestInput requires an options object");
   }
@@ -3221,12 +3296,23 @@ export function normalizeInteractionRequest(
   ) {
     throw new Error("ui.requestInput timeoutMs must be between 1 and 3600000");
   }
+  if (
+    request.describeSubmission !== undefined &&
+    typeof request.describeSubmission !== "function"
+  ) {
+    throw new Error("ui.requestInput describeSubmission must be a function");
+  }
   return {
     threadId: request.threadId,
     rendererId: request.rendererId,
     title: request.title.trim(),
     payload,
     timeoutMs,
+    presentation: parsePluginRowPresentation(
+      `ui.requestInput form "${request.rendererId}"`,
+      request.presentation,
+    ),
+    describeSubmission: request.describeSubmission ?? null,
   };
 }
 

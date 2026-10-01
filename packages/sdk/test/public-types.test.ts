@@ -222,6 +222,7 @@ interface NodeSurface {
 
 type ExpectedBbSdkKey =
   | "experimental_desktopBrowsers"
+  | "experimental_server"
   | "environments"
   | "files"
   | "guide"
@@ -276,8 +277,10 @@ type ExpectedHostsKey =
   | "cloneDefaultPath"
   | "experimental_create"
   | "experimental_getEnrollmentCommand"
+  | "experimental_reconnect"
   | "createJoinCode"
   | "delete"
+  | "experimental_deleteOldServerCopy"
   | "directory"
   | "get"
   | "installProviderCli"
@@ -290,9 +293,13 @@ type ExpectedHostsKey =
   | "experimental_retryCleanup"
   | "retryUpdate"
   | "experimental_suspend"
+  | "experimental_reconcile"
   | "update";
 
 type ExpectedPluginsKey =
+  | "experimental_discoverRpc"
+  | "experimental_getSafeMode"
+  | "experimental_setSafeMode"
   | "applyUpdate"
   | "callRpc"
   | "catalog"
@@ -315,6 +322,10 @@ type ExpectedPluginCatalogKey = "install" | "installPlan" | "search" | "status";
 type ExpectedPluginMarketplacesKey = "add" | "list" | "refresh" | "remove";
 
 type ExpectedProjectsKey =
+  | "machineEnvironment"
+  | "replaceMachineEnvironment"
+  | "setMachineEnvironmentVariable"
+  | "deleteMachineEnvironmentVariable"
   | "attachments"
   | "branches"
   | "commands"
@@ -340,14 +351,22 @@ type ExpectedProvidersKey = "list" | "models";
 type ExpectedStatusKey = "get";
 
 type ExpectedSystemKey =
+  | "acknowledgeAppUpdate"
+  | "appUpdate"
+  | "applyAppUpdate"
+  | "setMachineEnvironmentVariable"
+  | "deleteMachineEnvironmentVariable"
   | "machineEnvironment"
   | "replaceMachineEnvironment"
+  | "aiServices"
   | "attention"
   | "cliSkillsStatus"
   | "config"
   | "executionOptions"
   | "installCliSkills"
   | "reloadConfig"
+  | "setAiServiceSelection"
+  | "testAiService"
   | "transcribeVoice"
   | "uiPreferences"
   | "updateExperiments"
@@ -396,6 +415,7 @@ type ExpectedThreadsKey =
   | "queuedMessages"
   | "reorderPinned"
   | "resolveMentions"
+  | "restoreEnvironment"
   | "retry"
   | "search"
   | "send"

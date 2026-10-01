@@ -2,8 +2,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useAtom } from "jotai";
 import type { ProviderInfo, ThreadListEntry } from "@bb/domain";
 import { RouteAnchor } from "@/components/ui/app-route-anchor";
-import { ThreadStatusGlyph } from "@/components/sidebar/ThreadRow";
-import { SidebarChildToggleChevron } from "@/components/sidebar/SidebarChildToggleChevron";
+import { ThreadStatusGlyph } from "@/components/thread/ThreadStatusGlyph";
 import { getSidebarThreadRowPaddingLeft } from "@/components/sidebar/sidebarRowClasses";
 import { SIDEBAR_WORKING_STATUS_COLOR_CLASS } from "@/components/sidebar/sidebarRowClasses";
 import { CHROME_SECTION_LABEL_CLASS } from "@bb/shared-ui/chrome-style-tokens";
@@ -25,6 +24,10 @@ import {
   type ThreadListIndicatorState,
 } from "@bb/client-core";
 import { getThreadDisplayTitle } from "@/lib/thread-title";
+import {
+  ThreadTitle,
+  useThreadTitleDisplayText,
+} from "@/components/thread/ThreadTitleMentions";
 import { formatRelativeTime } from "@/lib/relative-time";
 import {
   findEnvironmentDisplayProvider,
@@ -151,9 +154,7 @@ function flattenMobileRecentNodes({
   items: readonly ProjectThreadItem[];
   rows: MobileRecentThreadRow[];
 }): void {
-  for (const item of items) {
-    if (item.kind !== "thread") continue;
-    const { node } = item;
+  for (const { node } of items) {
     const hasChildren = node.children.length > 0;
     const isCollapsed = hasChildren && collapsedThreadIds.has(node.thread.id);
     rows.push({
@@ -237,9 +238,9 @@ function MobileRecentThreadRow({
     hasChildren,
     isCollapsed,
   } = row;
-  const touchStartedBeyondLink = useRef(false);
+  const touchStartedBeforeLink = useRef(false);
   const { providers: environmentProviders } = useSystemEnvironmentProviders();
-  const threadTitle = getThreadDisplayTitle(thread);
+  const threadTitle = useThreadTitleDisplayText(getThreadDisplayTitle(thread));
   const indicatorState: ThreadListIndicatorState =
     threadListIndicatorStateForThread(thread, hasUnsubmittedDraft);
   const hasHiddenChildren = hasChildren && isCollapsed;
@@ -291,23 +292,72 @@ function MobileRecentThreadRow({
     provider,
   );
   const ProviderMark = providerIcon?.icon;
+  const providerTile = (
+    <span
+      className={cn(
+        "flex size-7 shrink-0 items-center justify-center rounded-md border border-border-seam bg-surface-raised",
+        depth > 0 && "opacity-60",
+      )}
+    >
+      {ProviderMark === undefined ? null : provider === null ? (
+        <ProviderMark className="size-4" />
+      ) : (
+        <ProviderIconMark
+          provider={provider}
+          icon={ProviderMark}
+          className="size-4"
+        />
+      )}
+    </span>
+  );
   return (
     <li
       onTouchStart={(event) => {
         const touch = event.touches[0];
         const link = event.currentTarget.querySelector("a");
-        touchStartedBeyondLink.current =
+        touchStartedBeforeLink.current =
           hasChildren &&
           touch !== undefined &&
           link !== null &&
-          touch.clientX >= link.getBoundingClientRect().right;
+          touch.clientX < link.getBoundingClientRect().left;
       }}
+      style={{ paddingLeft: getSidebarThreadRowPaddingLeft(depth) }}
       className={cn(
-        "flex items-center gap-1 rounded-md pr-2",
+        "flex items-center gap-2.5 rounded-md pr-2",
         MOBILE_RECENT_ROW_HEIGHT_CLASS,
         highlighted && "bg-surface-selected",
       )}
     >
+      {hasChildren ? (
+        <button
+          type="button"
+          aria-expanded={!isCollapsed}
+          aria-label={
+            isCollapsed
+              ? `Show threads under ${threadTitle}`
+              : `Hide threads under ${threadTitle}`
+          }
+          className="group relative -ml-6 flex h-11 w-13 shrink-0 cursor-pointer items-center rounded-md pl-6 outline-none"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onToggleCollapsed(thread.id);
+          }}
+        >
+          <Icon
+            name="ChevronRight"
+            className={cn(
+              "absolute left-2 size-3 text-subtle-foreground transition-transform duration-150 group-hover:text-muted-foreground group-focus-visible:text-muted-foreground",
+              !isCollapsed && "rotate-90",
+              depth > 0 && "opacity-60",
+            )}
+            aria-hidden="true"
+          />
+          {providerTile}
+        </button>
+      ) : (
+        providerTile
+      )}
       <RouteAnchor
         href={getThreadRoutePath({
           projectId: thread.projectId,
@@ -315,44 +365,23 @@ function MobileRecentThreadRow({
         })}
         aria-label={`Open ${threadTitle}${indicatorLabel ? ` — ${indicatorLabel}` : ""}`}
         onClick={(event) => {
-          const ignoreTouchClick = touchStartedBeyondLink.current;
-          touchStartedBeyondLink.current = false;
+          const ignoreTouchClick = touchStartedBeforeLink.current;
+          touchStartedBeforeLink.current = false;
           if (event.detail > 0 && ignoreTouchClick) {
             event.preventDefault();
           }
         }}
-        style={{ paddingLeft: getSidebarThreadRowPaddingLeft(depth) }}
         className={cn(
           "flex min-w-0 flex-1 items-center gap-2.5 rounded-md text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
           MOBILE_RECENT_ROW_HEIGHT_CLASS,
         )}
       >
-        <span
-          className={cn(
-            "flex size-7 shrink-0 items-center justify-center rounded-md border border-border-seam bg-surface-raised",
-            depth > 0 && "opacity-60",
-          )}
-        >
-          {ProviderMark === undefined ? null : provider === null ? (
-            <ProviderMark className="size-4" />
-          ) : (
-            <ProviderIconMark
-              provider={provider}
-              icon={ProviderMark}
-              className="size-4"
-            />
-          )}
-        </span>
         <span className="min-w-0 flex-1 space-y-0.5">
           <span className="flex min-w-0 items-center gap-1.5">
-            <span
-              className={cn(
-                "min-w-0 truncate font-medium",
-                COARSE_POINTER_TEXT_BASE_CLASS,
-              )}
-            >
-              {threadTitle}
-            </span>
+            <ThreadTitle
+              title={getThreadDisplayTitle(thread)}
+              className={cn("font-medium", COARSE_POINTER_TEXT_BASE_CLASS)}
+            />
           </span>
           <span
             className={cn(
@@ -377,15 +406,6 @@ function MobileRecentThreadRow({
           </span>
         ) : null}
       </RouteAnchor>
-      {hasChildren ? (
-        <SidebarChildToggleChevron
-          className="size-11 [&_svg]:size-5"
-          isCollapsed={isCollapsed}
-          expandLabel={`Show threads under ${threadTitle}`}
-          collapseLabel={`Hide threads under ${threadTitle}`}
-          onToggle={() => onToggleCollapsed(thread.id)}
-        />
-      ) : null}
     </li>
   );
 }

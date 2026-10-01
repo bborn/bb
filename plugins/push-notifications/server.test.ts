@@ -265,6 +265,67 @@ describe("push subscription RPC and CLI", () => {
       await host.cleanup();
     }
   });
+
+  it("documents limits in help, validates options, and reports errors as JSON", async () => {
+    const host = await setup();
+    try {
+      const help = (await host.harness.behavior.runCli(["add", "--help"]))
+        .stdout;
+      expect(help).toContain("bb push-notifications add");
+      expect(help).toContain("at most 512 characters");
+
+      const badPlatform = await host.harness.behavior.runCli([
+        "add",
+        "--token",
+        "ExponentPushToken[watch]",
+        "--platform",
+        "watchos",
+        "--label",
+        "Watch",
+      ]);
+      expect(badPlatform.exitCode).toBe(1);
+      expect(badPlatform.stderr).toContain(
+        "invalid value 'watchos' for --platform. Expected one of: ios, android",
+      );
+
+      const guessed = await host.harness.behavior.runCli([
+        "add",
+        "--expo-token",
+        "ExponentPushToken[tablet]",
+        "--os",
+        "android",
+        "--device",
+        "Tablet",
+        "--json",
+      ]);
+      expect(guessed.exitCode, guessed.stderr).toBe(0);
+      expect(JSON.parse(guessed.stdout)).toEqual({
+        id: "subscription-1",
+        created: true,
+      });
+
+      const envelope = await host.harness.behavior.runCli([
+        "remove",
+        "missing",
+        "--json",
+      ]);
+      expect(envelope.exitCode).toBe(1);
+      expect(JSON.parse(envelope.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          code: "subscription_not_found",
+          message: "Push subscription not found: missing",
+        },
+      });
+      expect(envelope.stderr).toContain("Push subscription not found: missing");
+
+      const badChannel = await host.harness.behavior.runCli(["test", "sms"]);
+      expect(badChannel.exitCode).toBe(1);
+      expect(badChannel.stderr).toContain("Use web or desktop");
+    } finally {
+      await host.cleanup();
+    }
+  });
 });
 
 describe("push sender", () => {

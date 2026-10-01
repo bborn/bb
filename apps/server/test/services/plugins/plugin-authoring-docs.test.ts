@@ -15,8 +15,8 @@ import {
   type PluginFileOpenerProps,
   type PluginHomepageSectionProps,
   type PluginHttpAuthMode,
-  type PluginCommandPaletteActionContext,
-  type PluginCommandPaletteActionRegistration,
+  type PluginCommandContext,
+  type PluginCommandRegistration,
   type PluginMessageActionContext,
   type PluginMessageActionRegistration,
   type PluginMessageDirectiveProps,
@@ -32,8 +32,10 @@ import {
   type PluginSettingsSectionProps,
   type PluginSidebarFooterActionProps,
   type ExperimentalSidebarNavigationProps,
+  type ExperimentalSidebarHeaderProps,
   type PluginSourceCodeRendererProps,
   type PluginThreadHeaderActionProps,
+  type ExperimentalPluginBrowserToolbarActionProps,
   type PluginThreadListProps,
   type PluginSidebarFooterActionRegistration,
   type PluginThreadEventPayloads,
@@ -132,7 +134,6 @@ const FRONTEND_TEST_EXPORT_NAMES = [
 
 const PUBLIC_PLUGIN_SDK_EXPORT_NAMES = [
   "bb-plugin-sdk.d.ts",
-  "bb-plugin-sdk-ai-services.d.ts",
   "bb-plugin-sdk-provider-bridge.d.ts",
   "bb-plugin-sdk-provider-bridge-testing.d.ts",
   "bb-plugin-sdk-provider-bridge-acp.d.ts",
@@ -171,6 +172,7 @@ const BB_PLUGIN_API_KEYS = [
   "experimental_serverAccess",
   "sdk",
   "onDispose",
+  "onInstall",
 ] as const satisfies readonly (keyof BbPluginApi)[];
 
 type MissingApiKey = Exclude<
@@ -215,6 +217,7 @@ void _assertAllAuthModesListed;
 const THREAD_EVENT_PAYLOAD_FIELDS = {
   "experimental_thread.events": ["thread", "sequence"],
   "experimental_terminal.input": ["terminal"],
+  "experimental_host.deleted": ["host"],
   "thread.created": ["thread"],
   "thread.active": ["thread"],
   "thread.idle": ["thread", "lastAssistantText"],
@@ -262,14 +265,16 @@ type SlotPropsByName = {
   pendingInteraction: PluginPendingInteractionProps;
   sidebarFooterAction: PluginSidebarFooterActionProps;
   experimental_sidebarNavigation: ExperimentalSidebarNavigationProps;
+  experimental_sidebarHeader: ExperimentalSidebarHeaderProps;
   experimental_threadList: PluginThreadListProps;
   experimental_threadHeaderAction: PluginThreadHeaderActionProps;
+  experimental_browserToolbarAction: ExperimentalPluginBrowserToolbarActionProps;
   fileOpener: PluginFileOpenerProps;
   experimental_sourceCodeRenderer: PluginSourceCodeRendererProps;
   experimental_diffRenderer: PluginDiffRendererProps;
   messageDirective: PluginMessageDirectiveProps;
   messageAction: PluginMessageActionContext;
-  commandPaletteAction: PluginCommandPaletteActionContext;
+  commandPaletteAction: PluginCommandContext;
   experimental_providerIcon: PluginProviderIconRegistration;
   experimental_timelineRenderer: PluginTimelineRendererProps;
   experimental_environmentProviderInputs: PluginEnvironmentProviderInputsProps;
@@ -281,6 +286,7 @@ const _assertAllSlotsListed: MissingSlot extends never ? true : never = true;
 void _assertAllSlotsListed;
 
 const APP_BUILDER_FIELDS = [
+  "commands",
   "experimental_icons",
   "slots",
   "composer",
@@ -337,24 +343,27 @@ const FRONTEND_SLOT_PROP_FIELDS = {
   pendingInteraction: ["interaction", "submit", "cancel"],
   sidebarFooterAction: [],
   experimental_sidebarNavigation: [
-    "items",
-    "activeItemId",
     "isCompactViewport",
-    "experimental_activate",
     "experimental_Original",
   ],
+  experimental_sidebarHeader: ["width", "controlSize", "isCompactViewport"],
   experimental_threadList: [
     "activeThreadId",
     "activeProjectId",
     "isCompactViewport",
     "onNavigate",
     "searchQuery",
-    "Original",
-    "experimental_Original",
   ],
   experimental_threadHeaderAction: [
     "threadId",
     "projectId",
+    "isCompactViewport",
+  ],
+  experimental_browserToolbarAction: [
+    "threadId",
+    "tabId",
+    "url",
+    "experimental_page",
     "isCompactViewport",
   ],
   fileOpener: [
@@ -468,14 +477,15 @@ const _assertAllMessageActionRegistrationFieldsListed: MissingMessageActionRegis
 void _assertAllMessageActionRegistrationFieldsListed;
 
 const COMMAND_PALETTE_ACTION_REGISTRATION_FIELDS = [
+  "defaultShortcut",
   "id",
   "title",
   "isAvailable",
   "run",
-] as const satisfies readonly (keyof PluginCommandPaletteActionRegistration)[];
+] as const satisfies readonly (keyof PluginCommandRegistration)[];
 
 type MissingCommandPaletteActionRegistrationField = Exclude<
-  keyof PluginCommandPaletteActionRegistration,
+  keyof PluginCommandRegistration,
   (typeof COMMAND_PALETTE_ACTION_REGISTRATION_FIELDS)[number]
 >;
 const _assertAllCommandPaletteActionRegistrationFieldsListed: MissingCommandPaletteActionRegistrationField extends never

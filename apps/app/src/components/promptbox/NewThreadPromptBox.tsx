@@ -35,6 +35,7 @@ import {
   PromptBoxInternal,
   type AttachmentsConfig,
   type HistoryConfig,
+  type MentionMenuPlacement,
   type PromptBoxAction,
   type PromptBoxHandle,
   type TypeaheadConfig,
@@ -85,6 +86,8 @@ export interface NewThreadEnvironmentConfig {
   selectedProviderHostId?: string | null;
   inputsControlProviderIds?: ReadonlySet<string>;
   onSelectProvider?: EnvironmentPickerUIProps["onSelectProvider"];
+  onSelectHost?: EnvironmentPickerUIProps["onSelectHost"];
+  onSelectReuse?: EnvironmentPickerUIProps["onSelectReuse"];
 }
 
 export interface NewThreadWorktreeConfig {
@@ -127,7 +130,6 @@ interface NewThreadPromptBoxUIProps {
   disabled: boolean;
   disabledReason?: string;
   autoFocus?: boolean;
-  allowSoftKeyboardAutoFocus?: boolean;
   pluginComposerHost?: PluginComposerHost | null;
   textEffects?: readonly ComposerTextEffectSource[];
   placeholder?: string;
@@ -136,6 +138,7 @@ interface NewThreadPromptBoxUIProps {
   typeahead: TypeaheadConfig;
   attachments: AttachmentsConfig;
   promptActions?: readonly PromptBoxAction[];
+  mentionMenuPlacement: MentionMenuPlacement;
 
   modeConfig: NewThreadModeConfig;
 
@@ -160,7 +163,6 @@ export const NewThreadPromptBoxUI = memo(function NewThreadPromptBoxUI({
   disabled,
   disabledReason,
   autoFocus,
-  allowSoftKeyboardAutoFocus,
   pluginComposerHost,
   textEffects,
   placeholder: placeholderOverride,
@@ -168,6 +170,7 @@ export const NewThreadPromptBoxUI = memo(function NewThreadPromptBoxUI({
   typeahead,
   attachments,
   promptActions,
+  mentionMenuPlacement,
   modeConfig,
   project,
   execution,
@@ -182,7 +185,7 @@ export const NewThreadPromptBoxUI = memo(function NewThreadPromptBoxUI({
     promptBoxRef.current?.focusEnd();
     return promptBoxRef.current !== null;
   }, []);
-  const voice = usePromptVoice(promptBoxRef);
+  const voice = usePromptVoice(promptBoxRef, pluginComposerHost ?? undefined);
   const attachmentCount = attachments.items?.length ?? 0;
   const [composerLayout, setComposerLayout] =
     useState<ComposerView["layout"]>("expanded");
@@ -217,13 +220,13 @@ export const NewThreadPromptBoxUI = memo(function NewThreadPromptBoxUI({
           disabled={disabled}
           disabledReason={disabledReason}
           autoFocus={autoFocus}
-          allowSoftKeyboardAutoFocus={allowSoftKeyboardAutoFocus}
           textEffects={textEffects}
           placeholder={placeholderOverride}
           history={history}
           typeahead={typeahead}
           attachments={attachments}
           promptActions={promptActions}
+          mentionMenuPlacement={mentionMenuPlacement}
           modeConfig={modeConfig}
           project={project}
           execution={execution}
@@ -255,13 +258,13 @@ const DefaultNewThreadComposer = memo(function DefaultNewThreadComposer({
   disabled,
   disabledReason,
   autoFocus,
-  allowSoftKeyboardAutoFocus,
   textEffects,
   placeholder: placeholderOverride,
   history,
   typeahead,
   attachments,
   promptActions,
+  mentionMenuPlacement,
   modeConfig,
   project,
   execution,
@@ -309,7 +312,7 @@ const DefaultNewThreadComposer = memo(function DefaultNewThreadComposer({
         onComposerLayoutChange={onComposerLayoutChange}
         history={history}
         typeahead={typeahead}
-        mentionMenuPlacement="bottom"
+        mentionMenuPlacement={mentionMenuPlacement}
         attachments={attachments}
         promptActions={promptActions}
         voice={voice}
@@ -320,7 +323,6 @@ const DefaultNewThreadComposer = memo(function DefaultNewThreadComposer({
           title: submitTitle,
         }}
         autoFocus={autoFocus}
-        allowSoftKeyboardAutoFocus={allowSoftKeyboardAutoFocus}
         editorLayout="root-compose"
         minHeight={NEW_THREAD_PROMPT_BOX_MIN_HEIGHT}
         placeholder={placeholder}
@@ -430,6 +432,8 @@ export function EnvironmentSlot({
         selectedProviderHostId={environment.selectedProviderHostId}
         inputsControlProviderIds={environment.inputsControlProviderIds}
         onSelectProvider={environment.onSelectProvider}
+        onSelectHost={environment.onSelectHost}
+        onSelectReuse={environment.onSelectReuse}
         className="shrink-0"
         muted
       />

@@ -13,6 +13,7 @@ import {
 import { homedir, hostname } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
+import { mutateManagedJsonFile } from "@bb/config/managed-json-file";
 import { z } from "zod";
 
 const serverUrlSchema = z
@@ -34,6 +35,8 @@ const bootstrapSchema = z.strictObject({
   headers: z.record(z.string(), z.string()).optional(),
   credential: z.string().min(1),
   expiresAt: z.number().finite().positive(),
+  reconnect: z.literal(true).optional(),
+  dataDir: z.string().min(1).optional(),
 });
 const configSchema = z.looseObject({
   serverUrl: serverUrlSchema.optional(),
@@ -130,13 +133,17 @@ export async function enrollMachine(
   const serverUrl = normalizeUrl(bootstrap.serverUrl);
   const dataDir = resolve(
     env.BB_DATA_DIR ??
+      bootstrap.dataDir ??
       join(
         home,
         ".bb-machines",
         new URL(bootstrap.serverUrl).host.replace(/[^a-zA-Z0-9.-]/gu, "-"),
       ),
   );
-  if (dataDir === resolve(home, ".bb"))
+  if (
+    dataDir === resolve(home, ".bb") &&
+    (await readOptional(join(dataDir, "host-id")))?.trim() !== bootstrap.hostId
+  )
     throw new Error(
       "Machine enrollment cannot use the default BB data directory",
     );
@@ -161,7 +168,14 @@ export async function enrollMachine(
       throw new Error("Refusing to overwrite a different machine identity");
     if (!config.serverUrl)
       throw new Error("Persisted machine server identity is missing");
-    return { hostId: auth.hostId };
+    if (!bootstrap.reconnect) return { hostId: auth.hostId };
+  } else if (
+    bootstrap.reconnect &&
+    (await readOptional(join(dataDir, "host-id")))?.trim() !== bootstrap.hostId
+  ) {
+    throw new Error(
+      `Machine ${bootstrap.hostId} is not installed in ${dataDir} on this computer; run the command on the computer where it runs`,
+    );
   }
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
   let config: z.infer<typeof configSchema>;
@@ -199,7 +213,7 @@ export async function enrollMachine(
       }
     }
   }
-  if (auth) {
+  if (auth && !bootstrap.reconnect) {
     if (!config.serverUrl)
       throw new Error("Persisted machine server identity is missing");
     await prepareRuntime();
@@ -209,11 +223,25 @@ export async function enrollMachine(
     throw new Error("Machine enrollment bootstrap has expired");
   const fetchFn = runtime.fetchFn ?? fetch;
   const signal = AbortSignal.timeout(60_000);
-  config = { ...config, serverUrl, serverHeaders: bootstrap.headers };
-  await atomicWrite(
-    join(dataDir, "config.json"),
-    `${JSON.stringify(config)}\n`,
-  );
+  const configPath = join(dataDir, "config.json");
+  config = await mutateManagedJsonFile({
+    path: configPath,
+    read: async () =>
+      configSchema.parse(JSON.parse((await readOptional(configPath)) ?? "{}")),
+    mutate: (current) => {
+      if (current.serverUrl && normalizeUrl(current.serverUrl) !== serverUrl) {
+        throw new Error("Refusing to overwrite a different machine identity");
+      }
+      const next: z.infer<typeof configSchema> = {
+        ...current,
+        serverUrl,
+        serverHeaders: bootstrap.headers,
+      };
+      delete next.machineCredential;
+      delete next.connectMachineId;
+      return next;
+    },
+  });
   await atomicWrite(join(dataDir, "host-id"), `${bootstrap.hostId}\n`);
   await prepareRuntime();
   let enrolled: z.infer<typeof authSchema>;

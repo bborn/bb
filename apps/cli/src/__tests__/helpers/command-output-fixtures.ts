@@ -67,6 +67,7 @@ export function makeTimelineResponse(
   return {
     rows,
     contextBoundarySeq: null,
+    completedTurnDisplay: "collapse",
     activePromptMode: null,
     activeThinking: null,
     activeWorkflows: [],
@@ -112,6 +113,7 @@ export function makeThread(overrides: MakeThreadArgs): Thread {
     sectionId: null,
     environmentId: null,
     parentThreadId: null,
+    lifecycleOwnerThreadId: null,
     sourceThreadId: null,
     originKind: null,
     originPluginId: null,
@@ -141,6 +143,7 @@ export function makeEnvironment(overrides: MakeEnvironmentArgs): Environment {
     environmentProviderSelection: null,
     environmentProviderInstanceKey: null,
     lifecycle: { phase: "active", retireAt: null, teardown: null },
+    hostLifecycle: "active",
     managed: false,
     workspaceProvisionType: null,
     status: "ready",

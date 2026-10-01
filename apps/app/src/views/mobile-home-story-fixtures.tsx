@@ -62,7 +62,7 @@ export const HOME_THREADS: ThreadListEntry[] = [
     titleFallback: "Reduce style recalculation",
     status: "starting",
     latestAttentionAt: 860,
-    runtime: { displayStatus: "starting", hostReconnectGraceExpiresAt: null },
+    runtime: { displayStatus: "starting" },
   }),
   makeThreadListEntry({
     id: "thr_home_automations",
@@ -164,6 +164,7 @@ export function StoryComposer() {
   return (
     <ModelPickerStoryQueryProvider>
       <NewThreadPromptBoxUI
+        mentionMenuPlacement="top"
         id="story-compact-home-composer"
         value={value}
         mentionRanges={mentionRanges}

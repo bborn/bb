@@ -50,12 +50,12 @@ import {
 } from "@/hooks/useTheme";
 import { useHostDaemon, useLocalHostDaemonAccess } from "@/hooks/useHostDaemon";
 import { useAppThemePreview } from "@/hooks/useAppThemePreview";
-import { UsageLimitsSettingsSection } from "@/components/settings/UsageLimitsSettingsSection";
 import { ProvidersSettingsSection } from "@/components/settings/ProvidersSettingsSection";
 import { CodeRendererSettings } from "@/components/settings/CodeRendererSettings";
 import { SidebarThreadListSetting } from "@/components/settings/SidebarThreadListSetting";
 import { SidebarFooterSettings } from "@/components/settings/SidebarFooterSettings";
 import { SidebarNavigationSetting } from "@/components/settings/SidebarNavigationSetting";
+import { SidebarHeaderSetting } from "@/components/settings/SidebarHeaderSetting";
 import { SplitDimmingSetting } from "@/components/settings/SplitDimmingSetting";
 import { useSettingsNavState } from "@/components/settings/settings-nav";
 import { PluginsOverview } from "@/components/plugin/PluginsOverview";
@@ -64,6 +64,7 @@ import { SETTINGS_PLUGIN_ROUTE_PATH } from "@/lib/route-paths";
 import { PluginSettingsPage } from "@/components/plugin/PluginSettings";
 import { FileOpenersSettingsSection } from "@/components/settings/FileOpenersSettingsSection";
 import { VoiceInputSettingsSection } from "@/components/settings/VoiceInputSettingsSection";
+import { AiServicesSettingsSection } from "@/components/settings/AiServicesSettingsSection";
 import { CommunitySettingsSection } from "@/components/settings/CommunitySettingsSection";
 import { UpdatesSettingsSection } from "@/components/settings/UpdatesSettingsSection";
 import { KeyboardSettingsSection } from "@/components/settings/KeyboardSettingsSection";
@@ -87,6 +88,7 @@ import {
 } from "@/lib/favicon-color-preference";
 import { useOpenLinksInAppBrowserPreference } from "@/lib/in-app-browser-link-preference";
 import { useRewriteLocalhostLinksPreference } from "@/lib/localhost-link-rewrite-preference";
+import { localhostLinkRewriteDescription } from "@/lib/localhost-link-rewrite-description";
 import { useRichTextEditingPreference } from "@/lib/rich-text-editing-preference";
 import {
   SETTINGS_ROUTE_PATH,
@@ -175,15 +177,17 @@ interface GeneralSettingsSectionProps {
   onRewriteLocalhostLinksChange: (enabled: boolean) => void;
   onRichTextEditingChange: (enabled: boolean) => void;
   onSteerActiveThreadOnEnterChange: (enabled: boolean) => void;
-  onStreamerModeChange: (enabled: boolean) => void;
   openLinksInAppBrowser: boolean;
   rewriteLocalhostLinks: boolean;
   richTextEditing: boolean;
   steerActiveThreadOnEnter: boolean;
-  streamerMode: boolean;
 }
 
-interface DebugSettingsSectionProps {
+interface PrivacySettingsSectionProps {
+  onStreamerModeChange: (enabled: boolean) => void;
+  streamerMode: boolean;
+  telemetryEnabled: boolean;
+  onTelemetryEnabledChange: (enabled: boolean) => void;
   disabled: boolean;
   enabled: boolean;
   onEnabledChange: (enabled: boolean) => void;
@@ -692,144 +696,154 @@ export function AppearanceSettingsSection({
     onAppearanceThemeChange(themeId);
   };
   return (
-    <SettingsSection title="Appearance">
-      <div className="space-y-5">
-        <SidebarThreadListSetting />
-        <SidebarNavigationSetting />
-        <CodeRendererSettings />
-        <SettingsWithControl label="Theme">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                className={SETTINGS_DROPDOWN_TRIGGER_CLASS}
-                aria-label="Theme"
-              >
-                {THEME_PREFERENCE_LABELS[themePreference]}
-                <Icon
-                  name="ChevronDown"
-                  className="size-3.5 text-muted-foreground"
-                />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              className={SETTINGS_DROPDOWN_CONTENT_CLASS}
-            >
-              {THEME_PREFERENCE_OPTIONS.map((option) => (
-                <DropdownMenuItem
-                  key={option.value}
-                  onSelect={() => onThemePreferenceChange(option.value)}
+    <div className="space-y-6">
+      <SettingsSection title="Appearance">
+        <div className="space-y-5">
+          <SettingsWithControl label="Theme">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={SETTINGS_DROPDOWN_TRIGGER_CLASS}
+                  aria-label="Theme"
                 >
-                  {option.label}
+                  {THEME_PREFERENCE_LABELS[themePreference]}
                   <Icon
-                    name="Check"
-                    className={cn(
-                      "ml-auto",
-                      themePreference !== option.value && "opacity-0",
-                      COARSE_POINTER_ICON_SIZE_CLASS,
-                    )}
+                    name="ChevronDown"
+                    className="size-3.5 text-muted-foreground"
                   />
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </SettingsWithControl>
-
-        <SettingsWithControl
-          label="Palette"
-          description={PALETTE_SETTING_DESCRIPTION}
-        >
-          <DropdownMenu
-            onOpenChange={(open) => {
-              if (open) {
-                paletteSelectedRef.current = false;
-                onAppearanceThemePrefetch([
-                  ...builtInThemes.map((entry) => entry.id),
-                  ...customThemes,
-                  ...pluginThemes.map((theme) => theme.id),
-                ]);
-                return;
-              }
-              previewPalette(null);
-            }}
-          >
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                className={SETTINGS_DROPDOWN_TRIGGER_CLASS}
-                aria-label="Palette"
-                disabled={appearanceDisabled}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                className={SETTINGS_DROPDOWN_CONTENT_CLASS}
               >
-                <span className="min-w-0 truncate">
-                  {appPaletteLabel(appearance, pluginThemes)}
-                </span>
-                <Icon
-                  name="ChevronDown"
-                  className="size-3.5 text-muted-foreground"
-                />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              className={SETTINGS_DROPDOWN_CONTENT_CLASS}
-            >
-              {builtInThemes.map((entry) => (
-                <PaletteMenuItem
-                  key={entry.id}
-                  themeId={entry.id}
-                  active={appearance.themeId === entry.id}
-                  onPreview={previewPalette}
-                  onSelect={selectPalette}
-                >
-                  {entry.name}
-                </PaletteMenuItem>
-              ))}
-              {customThemes.map((name) => (
-                <PaletteMenuItem
-                  key={`custom:${name}`}
-                  themeId={name}
-                  active={appearance.themeId === name}
-                  onPreview={previewPalette}
-                  onSelect={selectPalette}
-                >
-                  {name}
-                </PaletteMenuItem>
-              ))}
-              {pluginThemes.map((theme) => (
-                <PaletteMenuItem
-                  key={theme.id}
-                  themeId={theme.id}
-                  active={appearance.themeId === theme.id}
-                  onPreview={previewPalette}
-                  onSelect={selectPalette}
-                >
-                  {theme.name}
-                  <span className="text-muted-foreground">
-                    ({theme.pluginId})
-                  </span>
-                </PaletteMenuItem>
-              ))}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={onCreatePalette}>
-                <Icon name="Plus" className={COARSE_POINTER_ICON_SIZE_CLASS} />
-                Create
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </SettingsWithControl>
+                {THEME_PREFERENCE_OPTIONS.map((option) => (
+                  <DropdownMenuItem
+                    key={option.value}
+                    onSelect={() => onThemePreferenceChange(option.value)}
+                  >
+                    {option.label}
+                    <Icon
+                      name="Check"
+                      className={cn(
+                        "ml-auto",
+                        themePreference !== option.value && "opacity-0",
+                        COARSE_POINTER_ICON_SIZE_CLASS,
+                      )}
+                    />
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </SettingsWithControl>
 
-        <FaviconColorSettingsControl
-          disabled={appearanceDisabled}
-          faviconColor={faviconColor}
-          onFaviconColorChange={onFaviconColorChange}
-        />
-        <SplitDimmingSetting />
-        <SidebarFooterSettings />
-      </div>
-    </SettingsSection>
+          <SettingsWithControl
+            label="Palette"
+            description={PALETTE_SETTING_DESCRIPTION}
+          >
+            <DropdownMenu
+              onOpenChange={(open) => {
+                if (open) {
+                  paletteSelectedRef.current = false;
+                  onAppearanceThemePrefetch([
+                    ...builtInThemes.map((entry) => entry.id),
+                    ...customThemes,
+                    ...pluginThemes.map((theme) => theme.id),
+                  ]);
+                  return;
+                }
+                previewPalette(null);
+              }}
+            >
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={SETTINGS_DROPDOWN_TRIGGER_CLASS}
+                  aria-label="Palette"
+                  disabled={appearanceDisabled}
+                >
+                  <span className="min-w-0 truncate">
+                    {appPaletteLabel(appearance, pluginThemes)}
+                  </span>
+                  <Icon
+                    name="ChevronDown"
+                    className="size-3.5 text-muted-foreground"
+                  />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                className={SETTINGS_DROPDOWN_CONTENT_CLASS}
+              >
+                {builtInThemes.map((entry) => (
+                  <PaletteMenuItem
+                    key={entry.id}
+                    themeId={entry.id}
+                    active={appearance.themeId === entry.id}
+                    onPreview={previewPalette}
+                    onSelect={selectPalette}
+                  >
+                    {entry.name}
+                  </PaletteMenuItem>
+                ))}
+                {customThemes.map((name) => (
+                  <PaletteMenuItem
+                    key={`custom:${name}`}
+                    themeId={name}
+                    active={appearance.themeId === name}
+                    onPreview={previewPalette}
+                    onSelect={selectPalette}
+                  >
+                    {name}
+                  </PaletteMenuItem>
+                ))}
+                {pluginThemes.map((theme) => (
+                  <PaletteMenuItem
+                    key={theme.id}
+                    themeId={theme.id}
+                    active={appearance.themeId === theme.id}
+                    onPreview={previewPalette}
+                    onSelect={selectPalette}
+                  >
+                    {theme.name}
+                    <span className="text-muted-foreground">
+                      ({theme.pluginId})
+                    </span>
+                  </PaletteMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={onCreatePalette}>
+                  <Icon
+                    name="Plus"
+                    className={COARSE_POINTER_ICON_SIZE_CLASS}
+                  />
+                  Create
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </SettingsWithControl>
+
+          <FaviconColorSettingsControl
+            disabled={appearanceDisabled}
+            faviconColor={faviconColor}
+            onFaviconColorChange={onFaviconColorChange}
+          />
+          <SplitDimmingSetting />
+        </div>
+      </SettingsSection>
+      <SettingsSection title="Interface">
+        <div className="space-y-5">
+          <SidebarThreadListSetting />
+          <SidebarNavigationSetting />
+          <SidebarHeaderSetting />
+          <CodeRendererSettings />
+          <SidebarFooterSettings />
+        </div>
+      </SettingsSection>
+    </div>
   );
 }
 
@@ -844,151 +858,186 @@ export function GeneralSettingsSection({
   onRewriteLocalhostLinksChange,
   onRichTextEditingChange,
   onSteerActiveThreadOnEnterChange,
-  onStreamerModeChange,
   openLinksInAppBrowser,
   rewriteLocalhostLinks,
   richTextEditing,
   steerActiveThreadOnEnter,
-  streamerMode,
 }: GeneralSettingsSectionProps) {
+  const localhostRewriteDescription = localhostLinkRewriteDescription(
+    typeof window === "undefined" ? undefined : window.location.hostname,
+  );
   return (
-    <SettingsSection title="General">
-      <div className="space-y-5">
-        <SettingsWithControl
-          label={NAVIGATE_TO_THREAD_AFTER_CREATE_SETTING_LABEL}
-        >
-          <Switch
-            checked={navigateToThreadAfterCreate}
-            onCheckedChange={onNavigateToThreadAfterCreateChange}
-            aria-label={NAVIGATE_TO_THREAD_AFTER_CREATE_SETTING_LABEL}
-          />
-        </SettingsWithControl>
-
-        <SettingsWithControl label={RICH_TEXT_EDITING_SETTING_LABEL}>
-          <Switch
-            checked={richTextEditing}
-            onCheckedChange={onRichTextEditingChange}
-            aria-label={RICH_TEXT_EDITING_SETTING_LABEL}
-          />
-        </SettingsWithControl>
-
-        <SettingsWithControl
-          label={FOLLOW_UP_BEHAVIOR_SETTING_LABEL}
-          description="What Enter does in the prompt box while the thread runs."
-        >
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                className={SETTINGS_DROPDOWN_TRIGGER_CLASS}
-                disabled={generalSettingsDisabled}
-                aria-label={FOLLOW_UP_BEHAVIOR_SETTING_LABEL}
-              >
-                {steerActiveThreadOnEnter ? "Steer" : "Queue"}
-                <Icon
-                  name="ChevronDown"
-                  className="size-3.5 text-muted-foreground"
-                />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              className={cn(SETTINGS_DROPDOWN_CONTENT_CLASS, "max-w-72")}
-            >
-              {FOLLOW_UP_BEHAVIOR_OPTIONS.map((option) => (
-                <DropdownMenuItem
-                  key={option.label}
-                  className="items-start"
-                  onSelect={() =>
-                    onSteerActiveThreadOnEnterChange(option.steerOnEnter)
-                  }
-                >
-                  <span className="min-w-0">
-                    <span className="block">{option.label}</span>
-                    <span className="block text-2xs leading-snug text-subtle-foreground">
-                      {option.description}
-                    </span>
-                  </span>
-                  <Icon
-                    name="Check"
-                    className={cn(
-                      "ml-auto",
-                      steerActiveThreadOnEnter !== option.steerOnEnter &&
-                        "opacity-0",
-                      COARSE_POINTER_ICON_SIZE_CLASS,
-                    )}
-                  />
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </SettingsWithControl>
-
-        {desktopBrowserAvailable ? (
+    <>
+      <SettingsSection title="Threads & editing">
+        <div className="space-y-5">
           <SettingsWithControl
-            label={IN_APP_BROWSER_LINK_SETTING_LABEL}
-            description="Open web links inside bb."
+            label={NAVIGATE_TO_THREAD_AFTER_CREATE_SETTING_LABEL}
           >
             <Switch
-              checked={openLinksInAppBrowser}
-              onCheckedChange={onOpenLinksInAppBrowserChange}
-              aria-label={IN_APP_BROWSER_LINK_SETTING_LABEL}
+              checked={navigateToThreadAfterCreate}
+              onCheckedChange={onNavigateToThreadAfterCreateChange}
+              aria-label={NAVIGATE_TO_THREAD_AFTER_CREATE_SETTING_LABEL}
             />
           </SettingsWithControl>
-        ) : null}
 
-        <SettingsWithControl
-          label={REWRITE_LOCALHOST_LINKS_SETTING_LABEL}
-          description="Point localhost links at this host."
-        >
-          <Switch
-            checked={rewriteLocalhostLinks}
-            onCheckedChange={onRewriteLocalhostLinksChange}
-            aria-label={REWRITE_LOCALHOST_LINKS_SETTING_LABEL}
+          <SettingsWithControl label={RICH_TEXT_EDITING_SETTING_LABEL}>
+            <Switch
+              checked={richTextEditing}
+              onCheckedChange={onRichTextEditingChange}
+              aria-label={RICH_TEXT_EDITING_SETTING_LABEL}
+            />
+          </SettingsWithControl>
+
+          <SettingsWithControl
+            label={FOLLOW_UP_BEHAVIOR_SETTING_LABEL}
+            description="What Enter does in the prompt box while the thread runs."
+          >
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={SETTINGS_DROPDOWN_TRIGGER_CLASS}
+                  disabled={generalSettingsDisabled}
+                  aria-label={FOLLOW_UP_BEHAVIOR_SETTING_LABEL}
+                >
+                  {steerActiveThreadOnEnter ? "Steer" : "Queue"}
+                  <Icon
+                    name="ChevronDown"
+                    className="size-3.5 text-muted-foreground"
+                  />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                className={cn(SETTINGS_DROPDOWN_CONTENT_CLASS, "max-w-72")}
+              >
+                {FOLLOW_UP_BEHAVIOR_OPTIONS.map((option) => (
+                  <DropdownMenuItem
+                    key={option.label}
+                    className="items-start"
+                    onSelect={() =>
+                      onSteerActiveThreadOnEnterChange(option.steerOnEnter)
+                    }
+                  >
+                    <span className="min-w-0">
+                      <span className="block">{option.label}</span>
+                      <span className="block text-2xs leading-snug text-subtle-foreground">
+                        {option.description}
+                      </span>
+                    </span>
+                    <Icon
+                      name="Check"
+                      className={cn(
+                        "ml-auto",
+                        steerActiveThreadOnEnter !== option.steerOnEnter &&
+                          "opacity-0",
+                        COARSE_POINTER_ICON_SIZE_CLASS,
+                      )}
+                    />
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </SettingsWithControl>
+        </div>
+      </SettingsSection>
+      {desktopBrowserAvailable || localhostRewriteDescription !== null ? (
+        <SettingsSection title="Links">
+          <div className="space-y-5">
+            {desktopBrowserAvailable ? (
+              <SettingsWithControl
+                label={IN_APP_BROWSER_LINK_SETTING_LABEL}
+                description="Open web links inside bb."
+              >
+                <Switch
+                  checked={openLinksInAppBrowser}
+                  onCheckedChange={onOpenLinksInAppBrowserChange}
+                  aria-label={IN_APP_BROWSER_LINK_SETTING_LABEL}
+                />
+              </SettingsWithControl>
+            ) : null}
+
+            {localhostRewriteDescription !== null ? (
+              <SettingsWithControl
+                label={REWRITE_LOCALHOST_LINKS_SETTING_LABEL}
+                description={
+                  <span className="break-words [overflow-wrap:anywhere]">
+                    {localhostRewriteDescription}
+                  </span>
+                }
+              >
+                <Switch
+                  checked={rewriteLocalhostLinks}
+                  onCheckedChange={onRewriteLocalhostLinksChange}
+                  aria-label={REWRITE_LOCALHOST_LINKS_SETTING_LABEL}
+                />
+              </SettingsWithControl>
+            ) : null}
+          </div>
+        </SettingsSection>
+      ) : null}
+      <SettingsSection title="Git">
+        <div className="space-y-5">
+          <ManagedBranchPrefixSetting
+            value={managedBranchPrefix}
+            disabled={generalSettingsDisabled}
+            onChange={onManagedBranchPrefixChange}
           />
-        </SettingsWithControl>
+        </div>
+      </SettingsSection>
+    </>
+  );
+}
 
-        <ManagedBranchPrefixSetting
-          value={managedBranchPrefix}
-          disabled={generalSettingsDisabled}
-          onChange={onManagedBranchPrefixChange}
-        />
-
+export function PrivacySettingsSection({
+  disabled,
+  enabled,
+  onEnabledChange,
+  streamerMode,
+  onStreamerModeChange,
+  telemetryEnabled,
+  onTelemetryEnabledChange,
+}: PrivacySettingsSectionProps) {
+  return (
+    <SettingsSection title="Privacy & diagnostics">
+      <div className="space-y-5">
         <SettingsWithControl
           label={STREAMER_MODE_SETTING_LABEL}
           description="Hide the custom models from config.json in every model picker, so a screen share does not show them."
         >
           <Switch
             checked={streamerMode}
-            disabled={generalSettingsDisabled}
+            disabled={disabled}
             onCheckedChange={onStreamerModeChange}
             aria-label={STREAMER_MODE_SETTING_LABEL}
           />
         </SettingsWithControl>
-      </div>
-    </SettingsSection>
-  );
-}
 
-export function DebugSettingsSection({
-  disabled,
-  enabled,
-  onEnabledChange,
-}: DebugSettingsSectionProps) {
-  return (
-    <SettingsSection title="Debug">
-      <SettingsWithControl
-        label={DIAGNOSTIC_EVENTS_SETTING_LABEL}
-        description="Show provider environment resolution and unhandled provider events for troubleshooting."
-      >
-        <Switch
-          checked={enabled}
-          disabled={disabled}
-          onCheckedChange={onEnabledChange}
-          aria-label={DIAGNOSTIC_EVENTS_SETTING_LABEL}
-        />
-      </SettingsWithControl>
+        <SettingsWithControl
+          label="Share anonymous usage data"
+          description="Send anonymous app starts, thread and message counts, and plugin installs to help improve BB. Turning this off takes effect immediately for this server."
+        >
+          <Switch
+            checked={telemetryEnabled}
+            disabled={disabled}
+            onCheckedChange={onTelemetryEnabledChange}
+            aria-label="Share anonymous usage data"
+          />
+        </SettingsWithControl>
+
+        <SettingsWithControl
+          label={DIAGNOSTIC_EVENTS_SETTING_LABEL}
+          description="Show provider environment resolution and unhandled provider events for troubleshooting."
+        >
+          <Switch
+            checked={enabled}
+            disabled={disabled}
+            onCheckedChange={onEnabledChange}
+            aria-label={DIAGNOSTIC_EVENTS_SETTING_LABEL}
+          />
+        </SettingsWithControl>
+      </div>
     </SettingsSection>
   );
 }
@@ -1002,23 +1051,27 @@ const EXPERIMENT_DEFINITIONS: Record<
     description:
       "Show the latest release notes as a compact preview on the Updates page.",
   },
+  legacyJitiPluginLoader: {
+    label: "Legacy plugin loader (JITI)",
+    description:
+      "Load plugin server code with the legacy JITI runtime. Takes effect the next time a plugin loads.",
+  },
   mobileApp: {
     label: "Mobile app",
     description:
       "Pair the bb mobile app over bb connect: shows Add mobile device under Remote access and enables bb connect machine-code.",
+  },
+  serverMove: {
+    label: "Server move",
+    description:
+      "Move the bb server to another machine from Settings → Machines, and export or import server data with bb server.",
   },
   sidebarProgressiveDisclosure: {
     label: "Sidebar progressive disclosure",
     description:
       "In By project and By machine, show the first five groups in the current sort order, keep attention groups visible, and reveal ten more per click. Manually is unchanged.",
   },
-  timelineWindowing: {
-    label: "Timeline windowing",
-    description:
-      "Mount only nearby rows in long timelines and expanded timeline details.",
-  },
 };
-
 export function ExperimentsSettingsSection({
   disabled,
   experiments,
@@ -1122,6 +1175,8 @@ export function SettingsView() {
         }
       />
     );
+  } else if (activeSection === "ai-services") {
+    content = <AiServicesSettingsSection />;
   } else if (activeSection === "appearance") {
     content = (
       <AppearanceSettingsSection
@@ -1162,8 +1217,6 @@ export function SettingsView() {
         onThemePreferenceChange={setPreferredTheme}
       />
     );
-  } else if (activeSection === "usage") {
-    content = <UsageLimitsSettingsSection />;
   } else if (activeSection === "keyboard") {
     content = <KeyboardSettingsSection />;
   } else if (activeSection === "browser") {
@@ -1191,22 +1244,10 @@ export function SettingsView() {
       <>
         <MachinesSettingsSection />
         <MachineAccessSettings />
-        <details
-          id="advanced-machine-settings"
-          open={location.hash === "#advanced-machine-settings" || undefined}
-          className="group space-y-6"
-        >
-          <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 text-sm font-medium text-subtle-foreground [&::-webkit-details-marker]:hidden">
-            Advanced settings
-            <Icon
-              name="ChevronRight"
-              className="size-3.5 transition-transform group-open:rotate-90"
-            />
-          </summary>
-          <MachineEnvironmentSettings />
-        </details>
       </>
     );
+  } else if (activeSection === "environment-variables") {
+    content = <MachineEnvironmentSettings />;
   } else if (activeSection === "updates") {
     content = (
       <UpdatesSettingsSection
@@ -1263,6 +1304,17 @@ export function SettingsView() {
               steerActiveThreadOnEnter: enabled,
             })
           }
+        />
+        <CliSkillsSettingsSection />
+        <VoiceInputSettingsSection />
+        <PrivacySettingsSection
+          telemetryEnabled={generalSettings.telemetryEnabled}
+          onTelemetryEnabledChange={(enabled) =>
+            updateGeneralSettingsMutation.mutate({
+              ...generalSettings,
+              telemetryEnabled: enabled,
+            })
+          }
           streamerMode={generalSettings.streamerMode}
           onStreamerModeChange={(enabled) =>
             updateGeneralSettingsMutation.mutate({
@@ -1270,10 +1322,6 @@ export function SettingsView() {
               streamerMode: enabled,
             })
           }
-        />
-        <CliSkillsSettingsSection />
-        <VoiceInputSettingsSection />
-        <DebugSettingsSection
           enabled={generalSettings.showDiagnosticEvents}
           disabled={
             systemConfigQuery.data === undefined ||

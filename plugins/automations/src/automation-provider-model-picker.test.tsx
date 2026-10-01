@@ -3,13 +3,20 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  ExperimentalIconProps,
   ExperimentalPermissionModePickerProps,
   ExperimentalProviderIconProps,
   ExperimentalProviderModelPickerProps,
 } from "@get-bb/plugin-sdk/app";
-import type { AgentExecutionUpdate, AutomationResponse } from "./rpc-types.js";
+import type {
+  AgentExecutionUpdate,
+  AutomationDetailResponse,
+} from "./rpc-types.js";
 
 vi.mock("@get-bb/plugin-sdk/app", () => ({
+  experimental_Icon: ({ name }: ExperimentalIconProps) => (
+    <span data-icon={name} />
+  ),
   experimental_ProviderIcon: ({ provider }: ExperimentalProviderIconProps) => (
     <span data-provider-icon={provider.id} />
   ),
@@ -69,7 +76,7 @@ import { AutomationDetailView } from "../detail-view.js";
 
 afterEach(cleanup);
 
-const automation: AutomationResponse = {
+const automation: AutomationDetailResponse = {
   id: "auto_test",
   projectId: "proj_test",
   name: "Digest",
