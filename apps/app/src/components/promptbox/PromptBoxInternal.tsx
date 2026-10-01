@@ -131,6 +131,7 @@ import {
   withAttachmentMentionSuggestions,
   type AttachmentMentionSuggestion,
 } from "@/hooks/promptMentionCandidates";
+import { useForkHoldToTalk } from "./fork-hold-to-talk";
 import { VoiceRecordingBar } from "./VoiceRecordingBar";
 import {
   ComposerPlusMenuSlot,
@@ -3378,6 +3379,18 @@ export function PromptBoxInternal({
     submitPrompt,
   ]);
 
+  const forkHoldToTalk = useForkHoldToTalk({
+    voice,
+    isPointerCoarse,
+    canStartVoiceInput,
+    canSubmit,
+    startVoiceInput,
+    cancelVoiceInput,
+    submitPrompt,
+    onFallbackPointerDown: handleVoicePointerDown,
+    onFallbackClick: startVoiceInput,
+  });
+
   const handleSubmitClick = useCallback(
     (event: ReactMouseEvent<HTMLButtonElement>) => {
       blurAfterPointerSubmitRef.current =
@@ -3946,6 +3959,7 @@ export function PromptBoxInternal({
                 showCompactLayout && showVoiceActionGroup && "inset-0",
               )}
             >
+              {forkHoldToTalk.overlay}
               {voice && isVoiceActionPresent ? (
                 <div
                   data-promptbox-voice-controls=""
@@ -4032,8 +4046,7 @@ export function PromptBoxInternal({
                               : "Start voice input"
                           }
                           disabled={!canStartVoiceInput}
-                          onPointerDown={handleVoicePointerDown}
-                          onClick={startVoiceInput}
+                          {...forkHoldToTalk.micButtonProps}
                           className={
                             showCompactLayout
                               ? COMPACT_PROMPT_ACTION_BUTTON_CLASS
@@ -4076,8 +4089,7 @@ export function PromptBoxInternal({
                         size={showCompactLayout ? "icon" : "sm"}
                         variant="default"
                         aria-label="Start voice input"
-                        onPointerDown={handleVoicePointerDown}
-                        onClick={startVoiceInput}
+                        {...forkHoldToTalk.micButtonProps}
                         className={cn(
                           showCompactLayout
                             ? COMPACT_PROMPT_ACTION_BUTTON_CLASS
