@@ -94,6 +94,7 @@ import {
 } from "./editor/composer-mentions";
 import { ComposerPlusMenuSlot } from "./PromptBoxActionsMenu";
 import { refreshPromptDecorations } from "./editor/prompt-decoration-extension";
+import { useForkHoldToTalk } from "./fork-hold-to-talk";
 import { promptEditorExtensions } from "./editor/prompt-editor-extensions";
 import {
   AttachmentHistory,
@@ -2918,6 +2919,18 @@ export function PromptBoxInternal({
     if (canSubmitVoiceTranscript) dispatchSubmit();
   }, [value, canSubmitVoiceTranscript, dispatchSubmit]);
 
+  const forkHoldToTalk = useForkHoldToTalk({
+    voice,
+    isPointerCoarse,
+    canStartVoiceInput,
+    canSubmit,
+    startVoiceInput,
+    cancelVoiceInput,
+    submitPrompt,
+    onFallbackPointerDown: handleVoicePointerDown,
+    onFallbackClick: startVoiceInput,
+  });
+
   const handleSubmitClick = useCallback(
     (event: ReactMouseEvent<HTMLButtonElement>) => {
       blurAfterPointerSubmitRef.current =
@@ -3460,6 +3473,7 @@ export function PromptBoxInternal({
                 showCompactLayout && showVoiceActionGroup && "absolute inset-0",
               )}
             >
+              {forkHoldToTalk.overlay}
               {voice && isVoiceActionPresent ? (
                 <div
                   data-promptbox-voice-controls=""
@@ -3543,8 +3557,7 @@ export function PromptBoxInternal({
                               : "Start voice input"
                           }
                           disabled={!canStartVoiceInput}
-                          onPointerDown={handleVoicePointerDown}
-                          onClick={startVoiceInput}
+                          {...forkHoldToTalk.micButtonProps}
                           className={
                             showCompactLayout
                               ? COMPACT_PROMPT_ACTION_BUTTON_CLASS
@@ -3587,8 +3600,7 @@ export function PromptBoxInternal({
                         size={showCompactLayout ? "icon" : "sm"}
                         variant="default"
                         aria-label="Start voice input"
-                        onPointerDown={handleVoicePointerDown}
-                        onClick={startVoiceInput}
+                        {...forkHoldToTalk.micButtonProps}
                         className={cn(
                           showCompactLayout
                             ? COMPACT_PROMPT_ACTION_BUTTON_CLASS
