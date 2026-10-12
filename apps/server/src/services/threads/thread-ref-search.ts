@@ -1,8 +1,10 @@
-// FORK-ONLY (bborn/bb): find the thread behind a GitHub PR or a Linear issue.
+// FORK-ONLY (bborn/bb): find the thread behind a GitHub PR, a Linear issue,
+// or a branch.
 //
-// Paste a PR URL, `owner/repo#123`, a Linear URL, or `ENG-482` into thread
-// search and the threads that did the work come first: the one on the PR's
-// head branch, the one whose branch or title carries the ticket key. bb's
+// Paste a PR URL, `owner/repo#123`, a Linear URL, `ENG-482`, or a branch name
+// into thread search and the threads that did the work come first: the one on
+// the PR's head branch, the one whose branch or title carries the ticket key,
+// the one on the branch you typed. bb's
 // full-text search cannot find these on its own. It never reads branch names,
 // and it splits "OL-3782" into the words "ol" and "3782".
 //
@@ -19,7 +21,8 @@ import type { AppDeps } from "../../types.js";
 
 export type ThreadRef =
   | { kind: "pr"; owner: string; repo: string; number: number }
-  | { kind: "linear"; key: string };
+  | { kind: "linear"; key: string }
+  | { kind: "branch"; name: string };
 
 type ThreadSearchResult = ThreadSearchResultGroup["results"][number];
 type ThreadSearchMatch = ThreadSearchResult["matches"][number];
@@ -39,6 +42,10 @@ const PR_SHORT = /^([\w.-]+)\/([\w.-]+)#(\d+)$/;
 const LINEAR_URL = /linear\.app\/[\w-]+\/issue\/([a-z][a-z0-9]*-\d+)/i;
 // A letter first keeps dates and version ranges from reading as tickets.
 const LINEAR_KEY = /^[a-z][a-z0-9]{0,9}-\d+$/i;
+const BRANCH_URL = /github\.com\/[\w.-]+\/[\w.-]+\/tree\/([^?#\s]+)/i;
+// One token of branch characters with a separator in it. Needing a letter
+// keeps dates out; git refuses "..", which keeps path tricks out.
+const BRANCH = /^(?=.*[a-z])(?=.*[/_-])[\w./-]+$/i;
 // Every thread in a checkout shares these; a PR from one names no thread.
 const SHARED_BRANCHES = new Set([
   "main",
@@ -64,6 +71,10 @@ export function parseThreadRef(raw: string): ThreadRef | null {
   const linear = LINEAR_URL.exec(text);
   if (linear !== null) return { kind: "linear", key: linear[1]!.toUpperCase() };
   if (LINEAR_KEY.test(text)) return { kind: "linear", key: text.toUpperCase() };
+  const name = (BRANCH_URL.exec(text)?.[1] ?? text).replace(/^origin\//, "");
+  if (BRANCH.test(name) && !name.includes("..")) {
+    return { kind: "branch", name: name.toLowerCase() };
+  }
   return null;
 }
 
@@ -118,7 +129,11 @@ export function matchThreadRef(args: MatchThreadRefArgs): RefMatch[] {
       if (weight > score) reason = why;
       score += weight;
     };
-    if (ref.kind === "linear") {
+    if (ref.kind === "branch") {
+      const lower = branch.toLowerCase();
+      if (lower === ref.name) note(3, `On branch ${branch}`);
+      else if (lower.includes(ref.name)) note(1, `On branch ${branch}`);
+    } else if (ref.kind === "linear") {
       if (mentionsKey(branch, ref.key)) note(3, `On branch ${branch}`);
       if (mentionsKey(title, ref.key)) note(2, `${ref.key} in the title`);
     } else {
