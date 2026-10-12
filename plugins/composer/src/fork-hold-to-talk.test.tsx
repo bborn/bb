@@ -46,11 +46,13 @@ function Harness({
 }: HarnessProps) {
   const voice: PromptVoiceConfig = {
     state: voiceState,
+    microphoneWarning: null,
     isSupported: true,
     stream: null,
     start: handlers.start,
     stop: handlers.stop,
     cancel: handlers.cancel,
+    send: handlers.stop,
   };
   const holdToTalk = useForkHoldToTalk({
     voice,
