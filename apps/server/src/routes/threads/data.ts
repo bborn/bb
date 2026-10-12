@@ -28,6 +28,7 @@ import {
   type PublicApiSchema,
   type ThreadConversationOutlineResponse,
   type ThreadTimelineQuery,
+  type ThreadTimelineResponse,
 } from "@bb/server-contract";
 import type { AppDeps } from "../../types.js";
 import { COMMAND_TIMEOUT_MS } from "../../constants.js";
@@ -180,7 +181,7 @@ export function registerThreadDataRoutes(app: Hono, deps: AppDeps): void {
     onValidationError: (msg) => new ApiError(400, "invalid_request", msg),
   });
   const routes = publicApiRoutes.threads;
-  const timelineCache = createThreadTimelineCache();
+  const timelineCache = createThreadTimelineCache<ThreadTimelineResponse>();
   const timelineLatestRowsCache = createTimelineLatestRowsCache();
   const timelineDeltaFloorByThreadId = new Map<string, number>();
   deps.hub.onChangedMessage((message) => {
