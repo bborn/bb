@@ -57,6 +57,15 @@ describe("parseThreadRef", () => {
     expect(parseThreadRef("ol-3782")).toEqual(key);
   });
 
+  it("reads a branch name, a remote branch, or a GitHub branch URL", () => {
+    const branch = { kind: "branch", name: "task/5577-gifting-ux" };
+    expect(parseThreadRef("task/5577-gifting-ux")).toEqual(branch);
+    expect(parseThreadRef("origin/Task/5577-gifting-ux")).toEqual(branch);
+    expect(
+      parseThreadRef("https://github.com/o/r/tree/task/5577-gifting-ux"),
+    ).toEqual(branch);
+  });
+
   it("leaves ordinary searches alone", () => {
     for (const text of [
       "cart",
@@ -64,6 +73,7 @@ describe("parseThreadRef", () => {
       "2026-09-01",
       "stripe webhook",
       "github.com/../../pull/1",
+      "feature/../../etc",
     ]) {
       expect(parseThreadRef(text)).toBeNull();
     }
@@ -123,6 +133,30 @@ describe("matchThreadRef", () => {
       ["thr_branch", "On branch bruno/ol-3782-retry"],
       ["thr_title", "OL-3782 in the title"],
     ]);
+  });
+});
+
+describe("matchThreadRef for a branch", () => {
+  it("puts the exact branch first, then branches that contain it", () => {
+    const threads = [
+      thread({ id: "thr_other", environmentBranchName: "main" }),
+      thread({
+        id: "thr_longer",
+        updatedAt: 9,
+        environmentBranchName: "bb/ol-4301-collab-decline-thr_longer",
+      }),
+      thread({
+        id: "thr_exact",
+        archivedAt: 4,
+        environmentBranchName: "bb/OL-4301-collab-decline",
+      }),
+    ];
+    expect(match(parseThreadRef("bb/ol-4301-collab-decline")!, threads)).toEqual(
+      [
+        ["thr_exact", "On branch bb/OL-4301-collab-decline"],
+        ["thr_longer", "On branch bb/ol-4301-collab-decline-thr_longer"],
+      ],
+    );
   });
 });
 
