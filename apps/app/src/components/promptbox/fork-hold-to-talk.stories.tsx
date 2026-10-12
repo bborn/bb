@@ -47,7 +47,16 @@ function useFakeVoice(
     setState("idle");
   }, []);
 
-  return { state, isSupported: true, stream: null, start, stop, cancel };
+  return {
+    state,
+    microphoneWarning: null,
+    isSupported: true,
+    stream: null,
+    start,
+    stop,
+    send: stop,
+    cancel,
+  };
 }
 
 function HoldToTalkStage() {
