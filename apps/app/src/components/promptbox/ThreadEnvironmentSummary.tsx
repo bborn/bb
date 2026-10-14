@@ -1,5 +1,11 @@
 import { memo } from "react";
-import { OptionDisplay } from "@bb/shared-ui/option-display";
+import { Button } from "@bb/shared-ui/button";
+import {
+  OPTION_BASE_CLASS_NAME,
+  OPTION_INTERACTIVE_CLASS_NAME,
+  OPTION_MUTED_CLASS_NAME,
+  OptionDisplay,
+} from "@bb/shared-ui/option-display";
 import { copyToClipboardWithToast } from "@/lib/clipboard";
 import { Icon, type IconName } from "@bb/shared-ui/icon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@bb/shared-ui/tooltip";
@@ -16,12 +22,41 @@ const CHECKOUT_CHIP_BASE_CLASS_NAME =
   "flex min-w-0 flex-1 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground";
 const CHECKOUT_CHIP_BUTTON_CLASS_NAME = `${CHECKOUT_CHIP_BASE_CLASS_NAME} cursor-pointer transition-colors hover:bg-state-hover hover:text-foreground`;
 
+export function ThreadDetailsButton({
+  icon,
+  label,
+  onOpenDetails,
+}: {
+  icon: IconName;
+  label: string;
+  onOpenDetails: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      aria-label={`Thread details: ${label}`}
+      onClick={onOpenDetails}
+      className={cn(
+        OPTION_BASE_CLASS_NAME,
+        OPTION_INTERACTIVE_CLASS_NAME,
+        OPTION_MUTED_CLASS_NAME,
+        "h-6 max-md:pointer-coarse:h-11 max-md:pointer-coarse:px-2",
+      )}
+    >
+      <Icon name={icon} className="size-3.5 shrink-0" aria-hidden />
+      <span className="min-w-0 truncate">{label}</span>
+    </Button>
+  );
+}
+
 interface ThreadEnvironmentSummaryProps {
   projectName?: string;
   environmentLabel?: string;
   environmentCompactLabel?: string;
   environmentIcon?: IconName;
-  environmentTypeLabel?: string;
+  environmentProviderName?: string;
   environmentHost?: MachineLabelHost;
   environmentMachineProvider?: MachineProviderPresentation | null;
   environmentCheckout?: WorkspaceCheckoutDisplay;
@@ -33,7 +68,7 @@ export const ThreadEnvironmentSummary = memo(function ThreadEnvironmentSummary({
   environmentLabel,
   environmentCompactLabel,
   environmentIcon,
-  environmentTypeLabel,
+  environmentProviderName,
   environmentHost,
   environmentMachineProvider,
   environmentCheckout,
@@ -59,7 +94,6 @@ export const ThreadEnvironmentSummary = memo(function ThreadEnvironmentSummary({
           compactValue={projectName}
           leading={<Icon name="Folder" className="size-4 shrink-0" />}
           className="h-6 min-w-0 max-w-[10rem] shrink"
-          tooltip={`Project: ${projectName}`}
         />
       ) : null}
       {environmentHost ? (
@@ -71,19 +105,21 @@ export const ThreadEnvironmentSummary = memo(function ThreadEnvironmentSummary({
         />
       ) : environmentLabel ? (
         <div className="inline-flex h-6 w-fit max-w-full min-w-0 shrink items-center justify-start gap-1.5 px-1 text-xs leading-tight text-muted-foreground">
-          {environmentIcon && environmentTypeLabel ? (
+          {environmentIcon &&
+          environmentProviderName &&
+          environmentProviderName !== environmentLabel ? (
             <Tooltip>
               <TooltipTrigger asChild>
                 <span
                   role="img"
                   tabIndex={0}
-                  aria-label={`Environment type: ${environmentTypeLabel}`}
+                  aria-label={environmentProviderName}
                   className="inline-flex size-4 shrink-0 items-center justify-center rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                 >
                   <Icon name={environmentIcon} className="size-4" />
                 </span>
               </TooltipTrigger>
-              <TooltipContent>{environmentTypeLabel}</TooltipContent>
+              <TooltipContent>{environmentProviderName}</TooltipContent>
             </Tooltip>
           ) : environmentIcon ? (
             <Icon
@@ -99,7 +135,6 @@ export const ThreadEnvironmentSummary = memo(function ThreadEnvironmentSummary({
             value={environmentLabel}
             compactValue={environmentCompactLabel}
             className="h-6 min-w-0 shrink px-0"
-            tooltip={environmentLabel}
           />
         </div>
       ) : null}

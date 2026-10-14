@@ -7,12 +7,14 @@ import {
   useState,
   type FormEvent,
   type RefObject,
+  type ReactNode,
 } from "react";
 import type {
   BbDesktopBrowserApi,
   BbDesktopBrowserControl,
   BbDesktopBrowserFindInPageRequest,
   BbDesktopBrowserState,
+  BbDesktopBrowserTarget,
   BbDesktopBrowserViewportBounds,
   BbDesktopBrowserViewBounds,
 } from "@bb/desktop-contract";
@@ -36,6 +38,7 @@ import { useBrowserHistory } from "@/lib/browser-history";
 import { BROWSER_VIEW_BOUNDS_SYNC_EVENT } from "@/lib/browser-view-bounds-sync";
 import { useIsBrowserDimmingModalOpen } from "@/hooks/useBrowserDimmingModal";
 import { usePointerCoarse } from "@bb/shared-ui/hooks/use-pointer-coarse";
+import { useIsCompactViewport } from "@bb/shared-ui/hooks/use-compact-viewport";
 import {
   BrowserChromeIconButton,
   BrowserFindBar,
@@ -44,6 +47,7 @@ import {
 import { BrowserNewTabScreen } from "./BrowserNewTabScreen";
 import {
   registerBrowserView,
+  takeBrowserViewRecreation,
   type BrowserViewVisibilityCoordinator,
 } from "./browserViewVisibilityCoordinator";
 import { SECONDARY_PANEL_TOP_CHROME_BACKGROUND_CLASS } from "./panelChromeClasses";
@@ -54,9 +58,11 @@ import {
 } from "@/components/commands/AppCommandProvider";
 import type { AppShortcutPresentation } from "@/lib/app-keybindings";
 import { isLocalOnlyUrl } from "@/lib/loopback-hostname";
+import { PluginBrowserToolbarActions } from "@/components/plugin/PluginBrowserToolbarActions";
 
 interface BrowserTabContentProps {
   tabId: string;
+  desktopTarget?: BbDesktopBrowserTarget;
   existingOnly?: true;
   initialUrl: string;
   addressFocusRequest: BrowserAddressFocusRequest | null;
@@ -91,6 +97,7 @@ interface BrowserChromeProps {
   onOpenExternal: () => void;
   locationShortcut: AppShortcutPresentation | null;
   reloadShortcut: AppShortcutPresentation | null;
+  pluginActions: ReactNode;
 }
 
 interface BrowserViewBoundsFromElementArgs {
@@ -189,14 +196,13 @@ function BrowserChrome({
   onOpenExternal,
   locationShortcut,
   reloadShortcut,
+  pluginActions,
 }: BrowserChromeProps) {
   const isLoading = state?.isLoading ?? false;
   const security = getBrowserUrlSecurity(currentUrl);
   const addressValue = isEditing ? addressDraft : currentUrl;
   return (
     <div
-      data-testid="browser-tab-nav-bar"
-      data-state="expanded"
       role="region"
       aria-label="Browser navigation"
       tabIndex={-1}
@@ -206,7 +212,6 @@ function BrowserChrome({
       )}
     >
       <div
-        data-testid="browser-tab-nav-controls"
         className={cn(
           "absolute inset-x-0 top-0 flex h-11 translate-y-0 items-center gap-1 py-1.5 pl-2 pr-4 opacity-100 max-md:pointer-coarse:h-[52px]",
         )}
@@ -282,6 +287,7 @@ function BrowserChrome({
             />
           </div>
         </form>
+        {pluginActions}
         <BrowserChromeIconButton
           icon="ExternalLink"
           label="Open in external browser"
@@ -377,6 +383,7 @@ function BrowserPageLoadError({
 
 export function BrowserTabContent({
   tabId,
+  desktopTarget,
   existingOnly,
   initialUrl,
   addressFocusRequest,
@@ -400,6 +407,7 @@ export function BrowserTabContent({
   const addressInputRef = useRef<HTMLInputElement>(null);
   const findInputRef = useRef<HTMLInputElement>(null);
   const isPointerCoarse = usePointerCoarse();
+  const isCompactViewport = useIsCompactViewport();
   const {
     entries: recent,
     recordVisit,
@@ -439,6 +447,7 @@ export function BrowserTabContent({
   const [currentUrl, setCurrentUrl] = useState(initialUrl);
   const [addressDraft, setAddressDraft] = useState(initialUrl);
   const [isEditing, setIsEditing] = useState(false);
+  const [isPageFocusPending, setIsPageFocusPending] = useState(false);
   const [isFindOpen, setIsFindOpen] = useState(false);
   const isFindOpenRef = useRef(false);
   isFindOpenRef.current = isFindOpen;
@@ -455,6 +464,8 @@ export function BrowserTabContent({
   onUpdateRef.current = onUpdate;
   recordVisitRef.current = recordVisit;
   const initialUrlRef = useRef(initialUrl);
+  const existingOnlyRef = useRef(existingOnly);
+  const desktopTargetRef = useRef(desktopTarget);
   const [attachedBrowserViewIdentity, setAttachedBrowserViewIdentity] =
     useState<BrowserViewAttachIdentity | null>(null);
   const isBrowserViewAttached =
@@ -532,10 +543,14 @@ export function BrowserTabContent({
     const initialBounds = syncInitialBounds();
     const mountUrl = initialUrlRef.current;
     registerBrowserView({ environmentId, tabId, threadId });
+    const target = desktopTargetRef.current;
+    const attachExistingOnly =
+      existingOnlyRef.current === true &&
+      (target === undefined || !takeBrowserViewRecreation(tabId, target));
     desktopBrowser.attach({
       tabId,
       threadId,
-      ...(existingOnly === true ? { existingOnly } : {}),
+      ...(attachExistingOnly ? { existingOnly: true } : {}),
       url: mountUrl,
       bounds: initialBounds,
       visible: false,
@@ -603,7 +618,6 @@ export function BrowserTabContent({
     visibilityCoordinator,
     tabId,
     threadId,
-    existingOnly,
   ]);
 
   useEffect(() => {
@@ -653,19 +667,38 @@ export function BrowserTabContent({
     }
     if (isViewVisible) {
       visibilityCoordinator.show(tabId, syncBounds, {
-        focus: canHandleBrowserCommands,
+        focus: false,
       });
       return () => {
         visibilityCoordinator.hide(tabId);
       };
     }
     visibilityCoordinator.hide(tabId);
+  }, [visibilityCoordinator, tabId, isViewVisible, syncBounds]);
+
+  useLayoutEffect(() => {
+    if (!isPageFocusPending) return;
+    if (
+      !canShowNativeBrowserView ||
+      !canHandleBrowserCommands ||
+      hasPageLoadError ||
+      isBrowserDimmingModalOpen
+    ) {
+      setIsPageFocusPending(false);
+      return;
+    }
+    if (!isViewVisible) return;
+    setIsPageFocusPending(false);
+    desktopBrowser?.focus?.(tabId);
   }, [
+    isPageFocusPending,
+    canShowNativeBrowserView,
     canHandleBrowserCommands,
-    visibilityCoordinator,
-    tabId,
+    hasPageLoadError,
+    isBrowserDimmingModalOpen,
     isViewVisible,
-    syncBounds,
+    desktopBrowser,
+    tabId,
   ]);
 
   useEffect(() => {
@@ -676,11 +709,6 @@ export function BrowserTabContent({
       if (focusedTabId === tabId) onNativeFocus();
     });
   }, [desktopBrowser, onNativeFocus, tabId]);
-
-  useEffect(() => {
-    if (!isViewVisible || !canHandleBrowserCommands) return;
-    desktopBrowser?.focus?.(tabId);
-  }, [canHandleBrowserCommands, desktopBrowser, isViewVisible, tabId]);
 
   useEffect(() => {
     if (addressFocusRequest === null) {
@@ -718,7 +746,9 @@ export function BrowserTabContent({
       }
       setCurrentUrl(url);
       setIsEditing(false);
+      addressInputRef.current?.blur();
       desktopBrowser?.navigate({ tabId, url });
+      setIsPageFocusPending(true);
     },
     [desktopBrowser, tabId],
   );
@@ -872,6 +902,14 @@ export function BrowserTabContent({
         onOpenExternal={handleOpenExternal}
         locationShortcut={locationShortcut}
         reloadShortcut={reloadShortcut}
+        pluginActions={
+          <PluginBrowserToolbarActions
+            threadId={threadId}
+            tabId={tabId}
+            url={currentUrl}
+            isCompactViewport={isCompactViewport}
+          />
+        }
       />
       {control !== null ? (
         <div

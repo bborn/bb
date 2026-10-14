@@ -20,7 +20,15 @@ import {
 } from "../../internal/command-result-side-effects.js";
 import { handleLiveCommandResultSideEffects } from "../../internal/command-results.js";
 import { NotificationBuffer } from "../lib/notification-buffer.js";
-import { callHostOnlineRpc, callHostOnlineRpcForWork } from "./online-rpc.js";
+import {
+  callHostOnlineRpcForWork,
+  isHostUnavailableApiError,
+} from "./online-rpc.js";
+import {
+  noteTurnTraceCommandFailed,
+  noteTurnTraceCommandSent,
+  noteTurnTraceCommandSettled,
+} from "../system/turn-trace.js";
 
 export const LIVE_DAEMON_COMMAND_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
@@ -28,6 +36,7 @@ interface RunLiveHostCommandArgs<TType extends HostDaemonSettledCommandType> {
   command: Extract<HostDaemonCommand, { type: TType }>;
   execution?: HostDaemonCommandExecutionRecord;
   hostId: string;
+  preserveOnHostUnavailable?: boolean;
   timeoutMs: number;
 }
 
@@ -226,10 +235,7 @@ export async function runLiveHostCommand<
   const execution =
     args.execution ?? createLiveHostCommandExecution(args.hostId);
   try {
-    const call =
-      args.command.type === "thread.stop"
-        ? callHostOnlineRpc
-        : callHostOnlineRpcForWork;
+    const call = callHostOnlineRpcForWork;
     const sourceCommand: HostDaemonCommand = args.command;
     const command = {
       ...args.command,
@@ -247,11 +253,13 @@ export async function runLiveHostCommand<
           }
         : {}),
     };
+    noteTurnTraceCommandSent({ command: sourceCommand, hostId: args.hostId });
     const result = await call(deps, {
       command,
       hostId: args.hostId,
       timeoutMs: args.timeoutMs,
     });
+    noteTurnTraceCommandSettled({ command: sourceCommand, result });
     await applyLiveHostCommandReport(deps, {
       command: args.command,
       execution,
@@ -266,6 +274,13 @@ export async function runLiveHostCommand<
   } catch (error) {
     const normalized =
       error instanceof Error ? error : new Error(String(error));
+    noteTurnTraceCommandFailed(args.command);
+    if (
+      args.preserveOnHostUnavailable === true &&
+      isHostUnavailableApiError(normalized)
+    ) {
+      throw normalized;
+    }
     const failureReport = buildLiveHostCommandFailureReport({
       command: args.command,
       completedAt: Date.now(),

@@ -4,15 +4,11 @@ import type {
   ProjectExecutionDefaults,
   RecordedPermissionMode,
   ReasoningLevel,
-  ServiceTier,
   Thread,
 } from "@bb/domain";
 import { getEnvironment } from "@bb/db";
 import { DEFAULT_ENVIRONMENT_PROVIDER_ID } from "../environments/environment-provider-ids.js";
-import {
-  PERSONAL_PROJECT_ID,
-  clampPermissionModeToCeiling,
-} from "@bb/domain";
+import { DEFAULT_SERVICE_TIER, PERSONAL_PROJECT_ID } from "@bb/domain";
 import type {
   EnvironmentArgs,
   ProviderEnvironmentArgs,
@@ -31,28 +27,35 @@ import {
 } from "./thread-environment-placement.js";
 import { isLiveParentThread, type ParentThread } from "./thread-parent.js";
 
-export const DEFAULT_SERVICE_TIER: ServiceTier = "default";
 export const DEFAULT_REASONING_LEVEL: ReasoningLevel = "medium";
 
 const DEFAULT_PERMISSION_MODE: PermissionMode = "auto";
 
-function requireDefaultProviderId(registry: ProviderRegistryService): string {
-  const listed = registry.list();
+function listDefaultProviderIdCandidates(
+  registry: ProviderRegistryService,
+): string[] {
+  const disabled = registry.disabledProviderIds();
+  const available = registry
+    .list()
+    .filter(
+      (registration) =>
+        registration.info.available && !disabled.has(registration.info.id),
+    )
+    .map((registration) => registration.info.id);
   const preferred = registry.getUserDefaultProviderId();
-  const providerId =
-    (preferred !== null
-      ? listed.find(
-          (registration) =>
-            registration.info.id === preferred && registration.info.available,
-        )
-      : undefined
-    )?.info.id ??
-    listed.find((registration) => registration.info.available)?.info.id;
+  if (preferred !== null && available.includes(preferred)) {
+    return [preferred, ...available.filter((id) => id !== preferred)];
+  }
+  return available;
+}
+
+function requireDefaultProviderId(registry: ProviderRegistryService): string {
+  const providerId = listDefaultProviderIdCandidates(registry)[0];
   if (providerId === undefined) {
     throw new ApiError(
       409,
       "no_provider_available",
-      "No agent provider is enabled. Enable an agent provider plugin in Settings → Plugins to start a thread.",
+      "No agent provider is enabled. Enable an agent provider in Settings → Providers to start a thread.",
     );
   }
   return providerId;
@@ -66,6 +69,7 @@ interface ResolveCreateThreadExecutionDefaultsArgs {
 interface CreateThreadExecutionDefaultsResolved {
   executionDefaults: ProjectExecutionDefaults | null;
   providerId: string;
+  providerFallbackCandidates: readonly string[];
 }
 
 interface IsManagedChildThreadArgs {
@@ -181,10 +185,28 @@ export function resolveCreateThreadExecutionDefaults(
   registry: ProviderRegistryService,
   args: ResolveCreateThreadExecutionDefaultsArgs,
 ): CreateThreadExecutionDefaultsResolved {
+  const disabled = registry.disabledProviderIds();
+  const storedProviderId =
+    args.storedDefaults !== null &&
+    !disabled.has(args.storedDefaults.providerId)
+      ? args.storedDefaults.providerId
+      : undefined;
+  const isProductDefault =
+    args.requestedProviderId === undefined && storedProviderId === undefined;
+  const defaultCandidates = isProductDefault
+    ? listDefaultProviderIdCandidates(registry)
+    : [];
   const providerId =
     args.requestedProviderId ??
-    args.storedDefaults?.providerId ??
+    storedProviderId ??
     requireDefaultProviderId(registry);
+  if (disabled.has(providerId)) {
+    throw new ApiError(
+      409,
+      "provider_disabled",
+      `Provider "${providerId}" is disabled. Enable it in Settings → Providers.`,
+    );
+  }
   const registration = registry.get(providerId);
   if (registration !== null && !registration.info.available) {
     throw new ApiError(
@@ -196,7 +218,13 @@ export function resolveCreateThreadExecutionDefaults(
 
   const storedDefaults =
     args.storedDefaults?.providerId === providerId ? args.storedDefaults : null;
-  return { executionDefaults: storedDefaults, providerId };
+  return {
+    executionDefaults: storedDefaults,
+    providerId,
+    providerFallbackCandidates: defaultCandidates.filter(
+      (id) => id !== providerId,
+    ),
+  };
 }
 
 export function buildProviderThreadExecutionDefaults(
@@ -298,7 +326,22 @@ export async function resolveCreateThreadEnvironment(
     if (!parentThread.environmentId) {
       throw new Error("Personal parent thread is missing an environment");
     }
-    return { type: "reuse", environmentId: parentThread.environmentId };
+    const requestedEnvironment = args.requestedEnvironment;
+    const requestedMachine: ProviderEnvironmentArgs["machine"] =
+      requestedEnvironment.type === "provider"
+        ? requestedEnvironment.machine
+        : requestedEnvironment.type === "host" &&
+            requestedEnvironment.hostId !== undefined
+          ? { type: "existing", hostId: requestedEnvironment.hostId }
+          : undefined;
+    if (
+      requestedMachine === undefined ||
+      (requestedMachine.type === "existing" &&
+        getEnvironment(deps.db, parentThread.environmentId)?.hostId ===
+          requestedMachine.hostId)
+    ) {
+      return { type: "reuse", environmentId: parentThread.environmentId };
+    }
   }
   if (
     hasLiveParent &&
@@ -393,36 +436,6 @@ export function resolveThreadDefaultPermissionMode(
 }
 
 export function resolveThreadExecutionPermissionMode(
-  registry: ProviderRegistryService,
-  args: ResolveThreadExecutionPermissionModeArgs,
-): PermissionMode {
-  const permissionMode = resolvePreferredThreadExecutionPermissionMode(
-    registry,
-    args,
-  );
-  if (
-    !isManagedChildThread(args) ||
-    args.parentThreadExecutionPermissionMode === undefined
-  ) {
-    return permissionMode;
-  }
-
-  const ceiling = normalizeRecordedPermissionMode(
-    args.parentThreadExecutionPermissionMode,
-  );
-  const supported = registry.getSupportedPermissionModes(
-    args.thread.providerId,
-  );
-  return (
-    clampPermissionModeToCeiling({
-      ceiling,
-      permissionMode,
-      ...(supported ? { permissionModes: supported } : {}),
-    }) ?? ceiling
-  );
-}
-
-function resolvePreferredThreadExecutionPermissionMode(
   registry: ProviderRegistryService,
   args: ResolveThreadExecutionPermissionModeArgs,
 ): PermissionMode {

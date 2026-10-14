@@ -304,7 +304,7 @@ function nestedRows(row: TimelineRow): readonly TimelineRow[] {
     return row.children ?? [];
   }
   if (row.kind === "work" && row.workKind === "delegation") {
-    return row.childRows;
+    return row.childRows ?? [];
   }
   return [];
 }
@@ -333,7 +333,9 @@ describe("thread timeline parented pagination", () => {
     insertCrossWindowSubagentEvents(db, thread);
 
     const timeline = buildThreadTimelineWithProfile(db, thread, {
+      completedTurnDisplay: "collapse",
       eventBudget: 1_000_000,
+      includeClearedContextHistory: false,
       includeDiagnosticOperations: false,
       includeNestedRows: true,
       maxInlineOutputChars: null,
@@ -350,7 +352,9 @@ describe("thread timeline parented pagination", () => {
     insertCrossWindowSubagentEvents(db, thread);
 
     const latest = buildThreadTimelineWithProfile(db, thread, {
+      completedTurnDisplay: "collapse",
       eventBudget: 1_000_000,
+      includeClearedContextHistory: false,
       includeDiagnosticOperations: false,
       includeNestedRows: true,
       maxInlineOutputChars: null,
@@ -358,7 +362,9 @@ describe("thread timeline parented pagination", () => {
       page: { kind: "latest", segmentLimit: 2 },
     }).response;
     const timeline = buildThreadTimelineWithProfile(db, thread, {
+      completedTurnDisplay: "collapse",
       eventBudget: 1_000_000,
+      includeClearedContextHistory: false,
       includeDiagnosticOperations: false,
       includeNestedRows: true,
       maxInlineOutputChars: null,

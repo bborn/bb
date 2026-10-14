@@ -48,10 +48,11 @@ import {
   listHostFiles,
   listHostPaths,
   readHostFile,
-  readHostFileMetadata,
+  readHostFileChunk,
   readHostRelativeFile,
 } from "./command-handlers/host-files.js";
 import { writeHostFile } from "./command-handlers/file-write.js";
+import { discoverRepos } from "./command-handlers/discover-repos.js";
 import {
   mkdirHostPath,
   moveHostPath,
@@ -69,6 +70,7 @@ import type {
 } from "@bb/provider-bridge-protocol";
 import {
   discardThreadRewind,
+  deleteThreadStorage,
   ensureThreadRuntime,
   prepareThreadRewind,
   startThread,
@@ -86,11 +88,55 @@ import {
   workspaceResolutionFailureFromError,
 } from "./workspace-resolution.js";
 import { userExecutableProcessOptions } from "./user-executable-env.js";
+import type { ServerMoveService } from "./server-move/service.js";
+import { readWorkspaceAgentContext } from "./command-handlers/workspace-agent-context.js";
 
 const THREAD_STOP_ACTIVE_TURN_WAIT_MS = 5_000;
 
+type RuntimeStopCommand =
+  | CommandOf<"thread.stop">
+  | CommandOf<"thread.storage.delete">;
+
+async function stopThreadRuntime(
+  command: RuntimeStopCommand,
+  options: CommandDispatchOptions,
+): Promise<HostDaemonCommandResult<"thread.stop">> {
+  const released =
+    await options.runtimeManager.releaseThreadFromOtherEnvironments({
+      activeTurn: "interrupt",
+      environmentId: command.environmentId,
+      threadId: command.threadId,
+    });
+  const entry = await options.runtimeManager.getOrAwait(command.environmentId);
+  if (!entry) {
+    await options.eventSink.flush();
+    return { providerCheckpointId: released.providerCheckpointId };
+  }
+  let providerCheckpointId = released.providerCheckpointId;
+  if (entry.runtime.hasThread(command.threadId)) {
+    if (
+      command.type === "thread.stop" &&
+      command.intent === "release" &&
+      entry.runtime.getActiveTurnId(command.threadId) !== null
+    ) {
+      await options.eventSink.flush();
+      return { providerCheckpointId, activeTurnRetained: true };
+    }
+    if (command.type !== "thread.stop" || command.intent !== "release") {
+      await entry.runtime.waitForActiveTurn(command.threadId, {
+        timeoutMs: THREAD_STOP_ACTIVE_TURN_WAIT_MS,
+      });
+    }
+    const result = await entry.runtime.stopThread({
+      threadId: command.threadId,
+    });
+    providerCheckpointId = result.providerCheckpointId ?? providerCheckpointId;
+  }
+  await options.eventSink.flush();
+  return { providerCheckpointId };
+}
+
 export {
-  CommandDispatchError,
   getErrorCode,
   type CommandDispatchOptions,
 } from "./command-dispatch-support.js";
@@ -233,7 +279,6 @@ async function runProviderInstallationOnHost(
     );
     const maintenanceArgs = {
       providerId: command.providerId,
-      ...(command.cwd !== undefined ? { cwd: command.cwd } : {}),
       bridgeLaunch,
     };
     const run = await options.providerInstallationRun({
@@ -321,6 +366,13 @@ async function withRetainedThreadEnvironment<TResult>(
   }
 }
 
+function requireServerMove(options: CommandDispatchOptions): ServerMoveService {
+  if (!options.serverMove) {
+    throw new Error("Server move is unavailable on this daemon");
+  }
+  return options.serverMove;
+}
+
 async function forwardDesktopBrowserCommand<
   TCommand extends DesktopBrowserCommand,
 >(
@@ -333,9 +385,7 @@ async function forwardDesktopBrowserCommand<
 }
 
 async function withResolvedBridgeLaunch<TResult>(
-  command: CommandOf<
-    "provider.list_models" | "provider.health" | "provider.usage"
-  >,
+  command: CommandOf<"provider.list_models" | "provider.health">,
   options: CommandDispatchOptions,
   call: (args: {
     providerId: string;
@@ -410,42 +460,11 @@ const commandHandlers: CommandHandlerMap = {
       const entry = await ensureThreadRuntime(command, options);
       return submitTurn(command, entry, options);
     }),
-  "thread.stop": async (command, options) => {
-    const released =
-      await options.runtimeManager.releaseThreadFromOtherEnvironments({
-        activeTurn: "interrupt",
-        environmentId: command.environmentId,
-        threadId: command.threadId,
-      });
-    const entry = await options.runtimeManager.getOrAwait(
-      command.environmentId,
-    );
-    if (!entry) {
-      await options.eventSink.flush();
-      return {
-        providerCheckpointId: released.providerCheckpointId,
-      };
-    }
-    let providerCheckpointId = released.providerCheckpointId;
-    if (entry.runtime.hasThread(command.threadId)) {
-      if (command.intent === "release") {
-        if (entry.runtime.getActiveTurnId(command.threadId) !== null) {
-          await options.eventSink.flush();
-          return { providerCheckpointId };
-        }
-      } else {
-        await entry.runtime.waitForActiveTurn(command.threadId, {
-          timeoutMs: THREAD_STOP_ACTIVE_TURN_WAIT_MS,
-        });
-      }
-      const result = await entry.runtime.stopThread({
-        threadId: command.threadId,
-      });
-      providerCheckpointId =
-        result.providerCheckpointId ?? providerCheckpointId;
-    }
-    await options.eventSink.flush();
-    return { providerCheckpointId };
+  "thread.stop": stopThreadRuntime,
+  "thread.storage.delete": async (command, options) => {
+    const result = await stopThreadRuntime(command, options);
+    await deleteThreadStorage(command, options);
+    return result;
   },
   "thread.goal.clear": async (command, options) => {
     const entry = await ensureThreadRuntime(command, options);
@@ -628,6 +647,7 @@ const onlineRpcHandlers: OnlineRpcHandlerMap = {
   },
   "host.list_commands": listHostCommands,
   "host.list_skills": listHostSkills,
+  "host.read_workspace_agent_context": readWorkspaceAgentContext,
   "host.delete_skill": deleteHostSkill,
   "host.write_skill": writeHostSkill,
   "host.install_global_skills": installGlobalSkills,
@@ -635,8 +655,8 @@ const onlineRpcHandlers: OnlineRpcHandlerMap = {
     readGlobalSkillsStatus(command, {}),
   "host.inspect_git_source": inspectHostGitSource,
   "host.list_branch_options": listHostBranchOptions,
-  "host.file_metadata": readHostFileMetadata,
   "host.read_file": readHostFile,
+  "host.read_file_chunk": readHostFileChunk,
   "host.read_file_relative": readHostRelativeFile,
   "host.write_file": writeHostFile,
   "provider.list_models": (command, options) =>
@@ -647,10 +667,20 @@ const onlineRpcHandlers: OnlineRpcHandlerMap = {
     withResolvedBridgeLaunch(command, options, (args) =>
       options.providerHealth(args),
     ),
-  "provider.usage": (command, options) =>
-    withResolvedBridgeLaunch(command, options, (args) =>
-      options.providerUsage(args),
-    ),
+  "provider.usage": async (command, options) =>
+    options.providerUsage({
+      providerId: command.providerId,
+      bridgeLaunch: await resolveRuntimeBridgeLaunch(
+        command.bridgeLaunch,
+        options,
+      ),
+    }),
+  "host.discover_repos": (command) =>
+    discoverRepos({
+      maxDepth: command.maxDepth,
+      sinceDays: command.sinceDays,
+      limit: command.limit,
+    }),
   "provider.installation.status": async (command, options) => {
     const bridgeLaunch = await resolveRuntimeBridgeLaunch(
       command.bridgeLaunch,
@@ -658,10 +688,6 @@ const onlineRpcHandlers: OnlineRpcHandlerMap = {
     );
     return options.providerInstallationStatus({
       providerId: command.providerId,
-      ...(command.cwd !== undefined ? { cwd: command.cwd } : {}),
-      ...(command.requirement !== undefined
-        ? { requirement: command.requirement }
-        : {}),
       bridgeLaunch,
     });
   },
@@ -722,6 +748,18 @@ const onlineRpcHandlers: OnlineRpcHandlerMap = {
         return { outcome: "unavailable", message: lookup.message };
     }
   },
+  "server_move.inspect": (command, options) =>
+    requireServerMove(options).inspect(command),
+  "server_move.probe": (command, options) =>
+    requireServerMove(options).probe(command),
+  "server_move.prepare": (command, options) =>
+    requireServerMove(options).prepare(command),
+  "server_move.activate": (command, options) =>
+    requireServerMove(options).activate(command),
+  "server_move.abort": (command, options) =>
+    requireServerMove(options).abort(command),
+  "server_move.delete_old_copy": (_command, options) =>
+    requireServerMove(options).deleteOldCopy(),
 };
 
 export async function dispatchCommand<

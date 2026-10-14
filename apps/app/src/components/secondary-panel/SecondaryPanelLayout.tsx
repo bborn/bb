@@ -38,9 +38,12 @@ import {
   subscribeCompactSidebarDrawerShowing,
 } from "@/components/ui/sidebar-mobile-drawer-visibility";
 import { PluginDetailPanelContext } from "@/components/plugin/plugin-detail-navigation";
+import {
+  SecondaryPanelMinimumContext,
+  useSecondaryPanelSizing,
+} from "./secondaryPanelSizing";
 
 const FULL_PANEL_SIZE_PERCENT = 100;
-const MAIN_PANEL_MIN_SIZE_PERCENT = 30;
 
 function noopToggleMainCollapse(): void {}
 
@@ -71,7 +74,6 @@ interface SecondaryPanelLayoutProps {
   renderPanel: (args: SecondaryPanelRenderArgs) => ReactNode;
   renderHostedPanel?: (panel: ReactNode) => ReactNode;
   composerHost: PluginComposerHost | null;
-  compactPresentation: "shelf" | "full";
 }
 
 export function SecondaryPanelLayout({
@@ -90,15 +92,10 @@ export function SecondaryPanelLayout({
   renderPanel: renderWorkspacePanel,
   renderHostedPanel,
   composerHost,
-  compactPresentation: workspaceCompactPresentation,
 }: SecondaryPanelLayoutProps) {
+  const { ref: sizingRef, minimum: minimumSize } = useSecondaryPanelSizing();
   const paneContext = useOptionalPaneContext();
   const pluginDetails = useContext(PluginDetailPanelContext);
-  const isPluginDetailOpen =
-    pluginDetails !== null && pluginDetails.activePluginId !== null;
-  const compactPresentation = isPluginDetailOpen
-    ? "full"
-    : workspaceCompactPresentation;
   const renderPanel = useCallback(
     (args: SecondaryPanelRenderArgs) => (
       <PluginDetailPanelContext.Provider value={pluginDetails}>
@@ -317,6 +314,9 @@ export function SecondaryPanelLayout({
 
   const mainContent = (
     <div
+      data-split-pane-id={
+        secondaryPanelHost === null ? paneContext?.paneId : undefined
+      }
       inert={isMainCollapsed}
       className={cn(
         "flex min-h-0 min-w-0 flex-1 flex-col transition-opacity",
@@ -341,7 +341,7 @@ export function SecondaryPanelLayout({
 
   return (
     <>
-      <div className="flex min-h-0 w-full min-w-0 flex-1">
+      <div ref={sizingRef} className="flex min-h-0 w-full min-w-0 flex-1">
         <PanelGroup
           key={panelGroupKey ?? resetKey}
           ref={horizontalPanelGroupRef}
@@ -365,7 +365,7 @@ export function SecondaryPanelLayout({
                   ? FULL_PANEL_SIZE_PERCENT - persistedSecondaryWidthPercent
                   : FULL_PANEL_SIZE_PERCENT
             }
-            minSize={MAIN_PANEL_MIN_SIZE_PERCENT}
+            minSize={minimumSize.min * 100}
             order={1}
             className={cn(
               "min-w-0 overflow-clip transition-[flex-grow,flex-basis]",
@@ -374,14 +374,15 @@ export function SecondaryPanelLayout({
           >
             {mainContent}
           </Panel>
-          {inlinePanel}
+          <SecondaryPanelMinimumContext.Provider value={minimumSize}>
+            {inlinePanel}
+          </SecondaryPanelMinimumContext.Provider>
         </PanelGroup>
       </div>
       {renderAsDrawer ? (
         <CompactSecondaryPanelShelf
           open={open}
           onClose={onClose}
-          presentation={compactPresentation}
           srLabel={drawerLabel}
           onContentAnimationEnd={handleDrawerContentAnimationEnd}
         >

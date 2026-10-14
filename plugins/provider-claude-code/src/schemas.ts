@@ -73,8 +73,8 @@ export const sdkUsageSchema = z
   .object({
     input_tokens: z.number().optional(),
     output_tokens: z.number().optional(),
-    cache_read_input_tokens: z.number().optional(),
-    cache_creation_input_tokens: z.number().optional(),
+    cache_read_input_tokens: z.number().nonnegative().optional(),
+    cache_creation_input_tokens: z.number().nonnegative().optional(),
   })
   .passthrough();
 export type ClaudeSdkUsage = z.infer<typeof sdkUsageSchema>;
@@ -366,6 +366,9 @@ export const claudeUserMessageSchema = z
   .object({
     type: z.literal("user"),
     message: z.unknown(),
+    uuid: z.string().min(1).optional(),
+    isSynthetic: z.boolean().optional(),
+    parent_tool_use_id: z.string().nullable().optional(),
   })
   .passthrough();
 export type ClaudeUserMessage = z.infer<typeof claudeUserMessageSchema>;

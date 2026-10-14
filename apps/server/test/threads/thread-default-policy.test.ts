@@ -96,6 +96,15 @@ describe("resolveCreateThreadExecutionDefaults", () => {
     ).toEqual({
       providerId: "codex",
       executionDefaults: null,
+      providerFallbackCandidates: [
+        "claude-code",
+        "pi",
+        "acp-cursor",
+        "acp-opencode",
+        "acp-omp",
+        "acp-grok",
+        "acp-hermes-agent",
+      ],
     });
   });
 
@@ -139,6 +148,48 @@ describe("resolveCreateThreadExecutionDefaults", () => {
     ).toBe("pi");
   });
 
+  it("orders fallback candidates behind the chosen default, preferred provider first", async () => {
+    const preferences = {
+      providerOrder: ["pi", "claude-code"],
+      defaultProviderId: "codex" as string | null,
+    };
+    const userRegistry = createProviderRegistryService({
+      readUserProviderPreferences: () => preferences,
+    });
+    await registerFirstPartyProviders(userRegistry);
+
+    expect(
+      resolveCreateThreadExecutionDefaults(userRegistry, {
+        storedDefaults: null,
+      }).providerFallbackCandidates,
+    ).toEqual([
+      "pi",
+      "claude-code",
+      "acp-cursor",
+      "acp-opencode",
+      "acp-omp",
+      "acp-grok",
+      "acp-hermes-agent",
+    ]);
+  });
+
+  it("has no fallback candidates when a provider was explicitly requested", () => {
+    expect(
+      resolveCreateThreadExecutionDefaults(registry, {
+        requestedProviderId: "codex",
+        storedDefaults: null,
+      }).providerFallbackCandidates,
+    ).toEqual([]);
+  });
+
+  it("has no fallback candidates when a stored default provider is used", () => {
+    expect(
+      resolveCreateThreadExecutionDefaults(registry, {
+        storedDefaults: makeDefaults({ providerId: "codex" }),
+      }).providerFallbackCandidates,
+    ).toEqual([]);
+  });
+
   it("discards stored defaults when the resolved provider changes", () => {
     expect(
       resolveCreateThreadExecutionDefaults(registry, {
@@ -151,6 +202,7 @@ describe("resolveCreateThreadExecutionDefaults", () => {
     ).toEqual({
       providerId: "pi",
       executionDefaults: null,
+      providerFallbackCandidates: [],
     });
   });
 
@@ -167,6 +219,7 @@ describe("resolveCreateThreadExecutionDefaults", () => {
     ).toEqual({
       providerId: "codex",
       executionDefaults: storedDefaults,
+      providerFallbackCandidates: [],
     });
   });
 
@@ -180,7 +233,18 @@ describe("resolveCreateThreadExecutionDefaults", () => {
       resolveCreateThreadExecutionDefaults(degradedRegistry, {
         storedDefaults: null,
       }),
-    ).toEqual({ providerId: "claude-code", executionDefaults: null });
+    ).toEqual({
+      providerId: "claude-code",
+      executionDefaults: null,
+      providerFallbackCandidates: [
+        "pi",
+        "acp-cursor",
+        "acp-opencode",
+        "acp-omp",
+        "acp-grok",
+        "acp-hermes-agent",
+      ],
+    });
   });
 
   it("rejects an explicitly selected unavailable provider", async () => {
@@ -318,6 +382,7 @@ describe("resolveCreateThreadEnvironment", () => {
   it.each([
     {
       name: "the personal workspace sugar",
+      reuseParent: true,
       requestedEnvironment: {
         type: "host" as const,
         workspace: { type: "personal" as const },
@@ -325,6 +390,7 @@ describe("resolveCreateThreadEnvironment", () => {
     },
     {
       name: "a selection of the personal provider",
+      reuseParent: true,
       requestedEnvironment: {
         type: "provider" as const,
         environmentProviderId: "personal-workspace",
@@ -334,50 +400,91 @@ describe("resolveCreateThreadEnvironment", () => {
     },
     {
       name: "no environment at all",
+      reuseParent: true,
       requestedEnvironment: { type: "project-default" as const },
     },
+    {
+      name: "the personal workspace on the parent's machine",
+      reuseParent: true,
+      requestedEnvironment: {
+        type: "host" as const,
+        hostId: "host-1",
+        workspace: { type: "personal" as const },
+      },
+    },
+    {
+      name: "the personal provider without a machine",
+      reuseParent: true,
+      requestedEnvironment: {
+        type: "provider" as const,
+        environmentProviderId: "personal-workspace",
+        inputs: null,
+      },
+    },
+    {
+      name: "the personal workspace on another machine",
+      reuseParent: false,
+      requestedEnvironment: {
+        type: "host" as const,
+        hostId: "host-2",
+        workspace: { type: "personal" as const },
+      },
+    },
+    {
+      name: "the personal provider on another machine",
+      reuseParent: false,
+      requestedEnvironment: {
+        type: "provider" as const,
+        environmentProviderId: "personal-workspace",
+        machine: { type: "existing" as const, hostId: "host-2" },
+        inputs: null,
+      },
+    },
+    {
+      name: "the personal provider on a new machine",
+      reuseParent: false,
+      requestedEnvironment: {
+        type: "provider" as const,
+        environmentProviderId: "personal-workspace",
+        machine: {
+          type: "new" as const,
+          machineProviderId: "test-machine-provider",
+          inputs: null,
+        },
+        inputs: null,
+      },
+    },
   ])(
-    "shares personal child threads from $name",
-    async ({ requestedEnvironment }) => {
+    "respects placement for personal child threads from $name",
+    async ({ requestedEnvironment, reuseParent }) => {
       await withTestHarness(async (harness) => {
         installFakeGitWorktreeProvider();
+        const { host } = seedHostSession(harness.deps, { id: "host-1" });
+        const parentEnvironment = createEnvironment(harness.db, harness.hub, {
+          projectId: PERSONAL_PROJECT_ID,
+          hostId: host.id,
+          path: "/tmp/personal-child-parent",
+          providerOwnsPath: true,
+          status: "ready",
+          environmentProvider: null,
+        });
         await expect(
           resolveCreateThreadEnvironment(harness.deps, {
             parentThread: makeParentThread({
-              environmentId: "env-personal-parent",
+              environmentId: parentEnvironment.id,
               projectId: PERSONAL_PROJECT_ID,
             }),
             projectId: PERSONAL_PROJECT_ID,
             requestedEnvironment,
           }),
-        ).resolves.toEqual({
-          type: "reuse",
-          environmentId: "env-personal-parent",
-        });
+        ).resolves.toEqual(
+          reuseParent
+            ? { type: "reuse", environmentId: parentEnvironment.id }
+            : requestedEnvironment,
+        );
       });
     },
   );
-
-  it("shares a personal provider selection with its parent", async () => {
-    await expect(
-      resolveEnvironment({
-        parentThread: makeParentThread({
-          environmentId: "env-personal-parent",
-          projectId: PERSONAL_PROJECT_ID,
-        }),
-        projectId: PERSONAL_PROJECT_ID,
-        requestedEnvironment: {
-          type: "provider",
-          environmentProviderId: "personal-workspace",
-          machine: { type: "existing" as const, hostId: "host-1" },
-          inputs: null,
-        },
-      }),
-    ).resolves.toEqual({
-      type: "reuse",
-      environmentId: "env-personal-parent",
-    });
-  });
 
   it.each([
     {
@@ -634,17 +741,6 @@ describe("resolveThreadDefaultPermissionMode", () => {
 });
 
 describe("resolveThreadExecutionPermissionMode", () => {
-  it("honors the permission snapshot requested for a side chat", () => {
-    expect(
-      resolveThreadExecutionPermissionMode(registry, {
-        requestedPermissionMode: "full",
-        lastExecutionPermissionMode: "full",
-        projectExecutionPermissionMode: "full",
-        thread: makeThread({ originKind: "fork" }),
-      }),
-    ).toBe("full");
-  });
-
   it("prefers requested permission modes over every fallback", () => {
     expect(
       resolveThreadExecutionPermissionMode(registry, {
@@ -693,7 +789,7 @@ describe("resolveThreadExecutionPermissionMode", () => {
     ).toBe("full");
   });
 
-  it("never upgrades an inherited mode past the parent for provider support", () => {
+  it("resolves an inherited mode to the child provider supported mode", () => {
     expect(
       resolveThreadExecutionPermissionMode(registry, {
         parentThread: makeParentThread(),
@@ -704,10 +800,10 @@ describe("resolveThreadExecutionPermissionMode", () => {
           providerId: "pi",
         }),
       }),
-    ).toBe("accept-edits");
+    ).toBe("full");
   });
 
-  it("clamps an explicitly requested mode to the parent's mode", () => {
+  it("honors an explicitly requested mode above the parent's mode", () => {
     expect(
       resolveThreadExecutionPermissionMode(registry, {
         requestedPermissionMode: "full",
@@ -718,44 +814,15 @@ describe("resolveThreadExecutionPermissionMode", () => {
           providerId: "codex",
         }),
       }),
-    ).toBe("auto");
+    ).toBe("full");
   });
 
-  it("clamps the child's recorded mode to the parent's current mode", () => {
+  it("preserves the child's recorded mode above the parent's current mode", () => {
     expect(
       resolveThreadExecutionPermissionMode(registry, {
         lastExecutionPermissionMode: "full",
         parentThread: makeParentThread(),
         parentThreadExecutionPermissionMode: "auto",
-        thread: makeThread({
-          parentThreadId: "thr-parent-1",
-          providerId: "codex",
-        }),
-      }),
-    ).toBe("auto");
-  });
-
-  it("clamps a child in another project to its parent's mode", () => {
-    expect(
-      resolveThreadExecutionPermissionMode(registry, {
-        requestedPermissionMode: "full",
-        parentThread: makeParentThread({ projectId: "proj-other" }),
-        parentThreadExecutionPermissionMode: "auto",
-        thread: makeThread({
-          parentThreadId: "thr-parent-1",
-          projectId: "proj-1",
-          providerId: "codex",
-        }),
-      }),
-    ).toBe("auto");
-  });
-
-  it("keeps an explicit full request under a full parent", () => {
-    expect(
-      resolveThreadExecutionPermissionMode(registry, {
-        requestedPermissionMode: "full",
-        parentThread: makeParentThread(),
-        parentThreadExecutionPermissionMode: "full",
         thread: makeThread({
           parentThreadId: "thr-parent-1",
           providerId: "codex",

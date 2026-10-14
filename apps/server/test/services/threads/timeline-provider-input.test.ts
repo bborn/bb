@@ -160,7 +160,9 @@ describe("timeline pages with provider-recorded input", () => {
     seedExtensionTriggeredTurn(db, thread);
 
     const { response } = buildThreadTimelineWithProfile(db, thread, {
+      completedTurnDisplay: "collapse",
       eventBudget: 1_000_000,
+      includeClearedContextHistory: false,
       includeDiagnosticOperations: false,
       includeNestedRows: true,
       maxInlineOutputChars: 32_000,

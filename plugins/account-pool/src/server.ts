@@ -1,16 +1,35 @@
 import {
+  retryAvailabilityContract,
+  retryAvailabilityMethod,
+  type RetryAvailability,
+} from "./retry-contract.js";
+import { modelFamily } from "./quota.js";
+import { modelFamilySchema } from "./contracts.js";
+import { registerUsageSource } from "./usage-source.js";
+import {
   createUpstreamTransport,
   transportErrorCode,
 } from "./upstream-transport.js";
 import path from "node:path";
+import { z } from "zod";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { registerPoolCli } from "./cli.js";
 import {
   accountPoolConfigSchema,
   accountPoolConfigSetInputSchema,
+  poolAvailabilitySchema,
   type AccountPoolConfigController,
   type PoolProvider,
+  type PoolStatus,
 } from "./contracts.js";
+import {
+  AVAILABILITY_PATH,
+  PARENT_TOKEN_ENV,
+  PARENT_URL_ENV,
+  ParentAvailability,
+  readParentPool,
+  type ParentPool,
+} from "./parent-pool.js";
 import type {
   ImportedClaudeCredentials,
   ImportedCodexCredentials,
@@ -36,6 +55,8 @@ import {
 export interface AccountPoolPluginOptions {
   fetch?: typeof fetch;
   now?: () => number;
+  env?: NodeJS.ProcessEnv;
+  availabilityTtlMs?: number;
   refreshUrl?: string;
   codexRefreshUrl?: string;
   codexUsageUrl?: string;
@@ -53,6 +74,18 @@ export interface AccountPoolPluginOptions {
 
 const DISPOSE_INSPECTION_TIMEOUT_MS = 2_000;
 const DISPOSE_INSPECTION_TIMEOUT = Symbol("dispose-inspection-timeout");
+const HUB_BASE_PATH = "/api/v1/plugins/account-pool/http";
+
+const PROVIDER_ROUTING_ENV: Record<PoolProvider, readonly string[]> = {
+  claude: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
+  codex: ["CODEX_OPENAI_BASE_URL", "CODEX_POOL_AUTH_TOKEN"],
+};
+
+interface PoolEnvEntry {
+  name: string;
+  value: string | { serverPath: string };
+  reason: string;
+}
 
 export function helloResponse(): Response {
   return new Response(null, { status: 200 });
@@ -62,9 +95,17 @@ export function createAccountPoolPlugin(
   options: AccountPoolPluginOptions = {},
 ) {
   return async function accountPoolPlugin(bb: BbPluginApi): Promise<void> {
-    let currentSettings = accountPoolConfigSchema.parse(
-      (await bb.storage.kv.get("config")) ?? {},
-    );
+    const storedConfig = z
+      .record(z.string(), z.unknown())
+      .parse((await bb.storage.kv.get("config")) ?? {});
+    const hasRemovedSettings =
+      "cacheMissDebug" in storedConfig || "cacheMissMinTokens" in storedConfig;
+    delete storedConfig.cacheMissDebug;
+    delete storedConfig.cacheMissMinTokens;
+    let currentSettings = accountPoolConfigSchema.parse(storedConfig);
+    if (hasRemovedSettings) {
+      await bb.storage.kv.set("config", currentSettings);
+    }
     const config: AccountPoolConfigController = {
       get: () => currentSettings,
       set: async (input) => {
@@ -94,6 +135,11 @@ export function createAccountPoolPlugin(
     const enrolledHosts = await bb.sdk.hosts.list();
     await hubTokens.prune(enrolledHosts.map((host) => host.id));
     const routing = new RoutingStore(bb.storage.kv, now);
+    const parentPool = readParentPool(options.env ?? process.env);
+    const proxyingParent = (): ParentPool | null =>
+      parentPool !== null && currentSettings.parentMode === "proxy"
+        ? parentPool
+        : null;
     const db = bb.storage.database();
     bb.storage.migrate(db, QUOTA_MIGRATIONS);
     const quotas = new QuotaStore(db);
@@ -117,12 +163,18 @@ export function createAccountPoolPlugin(
       importCodexCredentials: options.importCodexCredentials,
       drainTimeoutMs: options.drainTimeoutMs,
       maxAffinityBindings: options.maxAffinityBindings,
+      getParentRoute: proxyingParent,
       onUpstreamError: (provider, error) =>
         bb.log.warn(
           `Account Pooler ${provider} transport failed: ${transportErrorCode(error)}.`,
         ),
       onAccountsChanged: () =>
         bb.realtime.publish(ACCOUNT_POOL_ACCOUNTS_CHANGED, {}),
+      onOAuthRefresh: (provider, accountId, outcome, detail) => {
+        const message = `Account Pooler ${provider} account ${accountId} OAuth refresh ${outcome}: ${detail}`;
+        if (outcome === "succeeded") bb.log.info(message);
+        else bb.log.warn(message);
+      },
     });
     if (transport !== null) {
       bb.onDispose(async () => {
@@ -130,6 +182,29 @@ export function createAccountPoolPlugin(
         await transport.destroy();
       });
     }
+    const availability =
+      parentPool === null
+        ? null
+        : new ParentAvailability({
+            parent: parentPool,
+            fetch: upstreamFetch ?? fetch,
+            now,
+            ...(options.availabilityTtlMs === undefined
+              ? {}
+              : { ttlMs: options.availabilityTtlMs }),
+            onError: (error) =>
+              bb.log.warn(
+                `Account Pooler could not read parent availability: ${error instanceof Error ? error.message : String(error)}.`,
+              ),
+          });
+    const parentStatus = async (): Promise<PoolStatus["parent"]> =>
+      parentPool === null || availability === null
+        ? null
+        : {
+            baseUrl: parentPool.baseUrl,
+            mode: currentSettings.parentMode,
+            availability: await availability.get(),
+          };
     const operations = new PoolOperations(
       accounts,
       quotas,
@@ -142,6 +217,7 @@ export function createAccountPoolPlugin(
       now,
       () => bb.realtime.publish(ACCOUNT_POOL_ACCOUNTS_CHANGED, {}),
       (accountId) => hub.refreshUsage(accountId, true),
+      parentStatus,
     );
     const login = new ClaudeOAuthLogin({
       fetch: upstreamFetch,
@@ -162,36 +238,120 @@ export function createAccountPoolPlugin(
         "Add and enable a Claude or Codex account with `bb pool account add`.",
       );
     }
+    const routedProviderSchema = z.enum(["claude", "codex"]);
+    const failedRequestSchema = z.object({
+      requestId: z.string(),
+      execution: z.object({ model: z.string() }),
+    });
+    const retryAvailability = async (input: {
+      threadId: string;
+      requestId: string;
+    }): Promise<RetryAvailability> => {
+      const provider = routedProviderSchema.safeParse(
+        await bb.storage.kv.get(`retry-route:${input.threadId}`),
+      );
+      if (!provider.success) return { kind: "not-routed" };
+      const events = await bb.sdk.threads.events.list({
+        threadId: input.threadId,
+        types: ["client/turn/requested"],
+        order: "desc",
+        limit: "1",
+      });
+      const request = failedRequestSchema.safeParse(events[0]?.data);
+      if (!request.success || request.data.requestId !== input.requestId)
+        return { kind: "unavailable", reason: "source-unavailable" };
+      return hub.retryAvailability(
+        provider.data,
+        modelFamily(request.data.execution.model),
+      );
+    };
+    bb.rpc.register(
+      retryAvailabilityContract,
+      { [retryAvailabilityMethod]: retryAvailability },
+      {
+        experimental_discoverable: true,
+        experimental_description:
+          "Account Pooler retry availability for routed failed turns.",
+      },
+    );
+    registerUsageSource(bb, hub);
     bb.rpc.register(
       accountPoolRpcContract,
       createRpcHandlers(operations, login, codexLogin, config),
     );
     registerPoolCli(bb, operations, login, codexLogin, config);
+    const canServe = async (provider: PoolProvider): Promise<boolean> => {
+      if (!(await operations.isRoutingEnabled(provider))) return false;
+      if (proxyingParent() !== null && availability !== null) {
+        return (await availability.get())[provider];
+      }
+      return operations.hasUsableEnabledAccount(provider);
+    };
+    const markerEntries = (token: string): PoolEnvEntry[] => [
+      {
+        name: PARENT_URL_ENV,
+        value: { serverPath: HUB_BASE_PATH },
+        reason: "Account Pooler hub for nested bb servers on this machine",
+      },
+      {
+        name: PARENT_TOKEN_ENV,
+        value: token,
+        reason: "Account Pooler hub token for this machine",
+      },
+    ];
+    const neutralized = (provider: PoolProvider): PoolEnvEntry[] =>
+      PROVIDER_ROUTING_ENV[provider].map((name) => ({
+        name,
+        value: "",
+        reason:
+          "Account Pooler is isolated from the parent bb server's pool on this instance",
+      }));
+    const contributeFor =
+      (
+        provider: PoolProvider,
+        serving: (token: string) => Promise<PoolEnvEntry[]>,
+      ) =>
+      async (context: { threadId: string; hostId: string }) => {
+        const bypassed = await routing.isBypassed(context.threadId);
+        if (!bypassed && (await canServe(provider))) {
+          await bb.storage.kv.set(`retry-route:${context.threadId}`, provider);
+          const token = await hubTokens.forHost(context.hostId);
+          if (provider === "claude") {
+            await routing.recordRouted(context.threadId, context.hostId);
+          }
+          return [...(await serving(token)), ...markerEntries(token)];
+        }
+        await bb.storage.kv.delete(`retry-route:${context.threadId}`);
+        return parentPool === null ? [] : neutralized(provider);
+      };
+    const subscriptionCacheEntries = async (): Promise<PoolEnvEntry[]> =>
+      proxyingParent() === null &&
+      (await operations.routesOnlyApiKeys("claude"))
+        ? []
+        : [
+            {
+              name: "ENABLE_PROMPT_CACHING_1H",
+              value: "1",
+              reason:
+                "Claude Code uses a 5-minute prompt cache behind a custom base URL; subscription accounts get the 1-hour cache Claude Code uses for a direct subscription login",
+            },
+          ];
     const proxiedHealth = async (provider: PoolProvider) =>
-      (await operations.isRoutingEnabled(provider)) &&
-      (await operations.hasUsableEnabledAccount(provider))
+      (await canServe(provider))
         ? {
             label: "Proxied",
             statusMessage:
-              "Credentials are provided by the Account Pooler hub.",
+              proxyingParent() === null
+                ? "Credentials are provided by the Account Pooler hub."
+                : "Credentials are proxied to the parent bb server's Account Pooler.",
           }
         : null;
-    bb.providers.experimental_contributeEnv("claude-code", async (context) => {
-      if (
-        !(await operations.isRoutingEnabled("claude")) ||
-        (await routing.isBypassed(context.threadId)) ||
-        !(await operations.hasUsableEnabledAccount("claude"))
-      ) {
-        return [];
-      }
-      const token = await hubTokens.forHost(context.hostId);
-      await routing.recordRouted(context.threadId, context.hostId);
-      return [
+    bb.providers.experimental_contributeEnv(
+      "claude-code",
+      contributeFor("claude", async (token) => [
         {
           name: "ANTHROPIC_BASE_URL",
-          value: {
-            serverPath: "/api/v1/plugins/account-pool/http",
-          },
+          value: { serverPath: HUB_BASE_PATH },
           reason: "Routed through the Account Pooler hub",
         },
         {
@@ -205,26 +365,24 @@ export function createAccountPoolPlugin(
           reason:
             "Claude Code turns tool search off behind a custom base URL; the hub forwards tool_reference blocks",
         },
-      ];
-    });
+        {
+          name: "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL",
+          value: "1",
+          reason:
+            "Claude Code limits Opus to a 200k context window behind a custom base URL; the hub forwards to Anthropic's API",
+        },
+        ...(await subscriptionCacheEntries()),
+      ]),
+    );
     bb.providers.experimental_contributeEnvHealth("claude-code", () =>
       proxiedHealth("claude"),
     );
-    bb.providers.experimental_contributeEnv("codex", async (context) => {
-      if (
-        !(await operations.isRoutingEnabled("codex")) ||
-        (await routing.isBypassed(context.threadId)) ||
-        !(await operations.hasUsableEnabledAccount("codex"))
-      ) {
-        return [];
-      }
-      const token = await hubTokens.forHost(context.hostId);
-      return [
+    bb.providers.experimental_contributeEnv(
+      "codex",
+      contributeFor("codex", async (token) => [
         {
           name: "CODEX_OPENAI_BASE_URL",
-          value: {
-            serverPath: "/api/v1/plugins/account-pool/http/v1",
-          },
+          value: { serverPath: `${HUB_BASE_PATH}/v1` },
           reason: "Routed through the Account Pooler hub",
         },
         {
@@ -232,8 +390,8 @@ export function createAccountPoolPlugin(
           value: token,
           reason: "Account Pooler hub token for this machine",
         },
-      ];
-    });
+      ]),
+    );
     bb.providers.experimental_contributeEnvHealth("codex", () =>
       proxiedHealth("codex"),
     );
@@ -265,18 +423,14 @@ export function createAccountPoolPlugin(
         if (timer !== null) clearTimeout(timer);
       }
     });
-    bb.http.route(
-      "POST",
-      "/v1/messages",
-      (context) => hub.handle(context.req.raw, "claude"),
-      { auth: "none" },
-    );
-    bb.http.route(
-      "POST",
-      "/v1/messages/count_tokens",
-      (context) => hub.handle(context.req.raw, "claude"),
-      { auth: "none" },
-    );
+    for (const route of ["/v1/messages", "/v1/messages/count_tokens"]) {
+      bb.http.route(
+        "POST",
+        route,
+        (context) => hub.handle(context.req.raw, "claude", route),
+        { auth: "none" },
+      );
+    }
     for (const route of [
       "/v1/responses",
       "/v1/images/generations",
@@ -286,14 +440,48 @@ export function createAccountPoolPlugin(
       bb.http.route(
         "POST",
         route,
-        (context) => hub.handle(context.req.raw, "codex"),
+        (context) => hub.handle(context.req.raw, "codex", route),
         { auth: "none" },
       );
     }
     bb.http.route(
       "GET",
       "/v1/models",
-      (context) => hub.handle(context.req.raw, "codex"),
+      (context) => hub.handle(context.req.raw, "codex", "/v1/models"),
+      { auth: "none" },
+    );
+    bb.http.route(
+      "GET",
+      AVAILABILITY_PATH,
+      async (context) => {
+        if ((await hub.authenticate(context.req.raw)) === null) {
+          return new Response(null, { status: 401 });
+        }
+        return Response.json(
+          poolAvailabilitySchema.parse({
+            claude: await canServe("claude"),
+            codex: await canServe("codex"),
+          }),
+        );
+      },
+      { auth: "none" },
+    );
+    bb.http.route(
+      "GET",
+      "/retry-availability",
+      async (context) => {
+        if ((await hub.authenticate(context.req.raw)) === null)
+          return new Response(null, { status: 401 });
+        const query = z
+          .object({ provider: routedProviderSchema, family: modelFamilySchema })
+          .safeParse(
+            Object.fromEntries(new URL(context.req.raw.url).searchParams),
+          );
+        if (!query.success) return new Response(null, { status: 400 });
+        return Response.json(
+          await hub.retryAvailability(query.data.provider, query.data.family),
+        );
+      },
       { auth: "none" },
     );
     bb.http.route("HEAD", "/api/hello", () => helloResponse(), {

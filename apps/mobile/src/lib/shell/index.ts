@@ -5,7 +5,9 @@ export {
   shellPathFromUrl,
 } from "./shell-url";
 export {
+  resolveShellLoadPath,
   resolveShellScreenState,
+  revealsShellFailure,
   shouldReloadForSession,
   type ShellLoadPhase,
 } from "./shell-state";

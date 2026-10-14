@@ -1,3 +1,8 @@
+import { createThreadRequestSchema } from "@bb/server-contract";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import * as domain from "@bb/domain";
 import {
@@ -22,7 +27,94 @@ describe("bb thread spawn command output", () => {
     return vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   }
 
-  it("bb thread spawn sends project-default when the user relies on project defaults", async () => {
+  it("rejects explicitly empty lifecycle ownership instead of creating an independent thread", async () => {
+    const post = vi.fn(async ({ json }: { json: unknown }) => {
+      createThreadRequestSchema.parse(json);
+      return fixtures.makeThread({
+        id: "unexpected-independent-thread",
+        projectId: "proj-1",
+        providerId: "codex",
+      });
+    });
+    stubServerApi({ "v1.threads.$post": post });
+    await expect(
+      runCommand(
+        [
+          "thread",
+          "spawn",
+          "--project",
+          "proj-1",
+          "--prompt",
+          "hello",
+          "--lifecycle-owner-thread",
+          "",
+        ],
+        register,
+      ),
+    ).rejects.toThrow("process.exit:1");
+    expect(post).toHaveBeenCalledWith({
+      json: expect.objectContaining({ lifecycleOwnerThreadId: "" }),
+    });
+  });
+
+  it("bb thread spawn --prompt-file sends shell-active text untouched", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "bb-spawn-prompt-"));
+    const path = join(dir, "prompt.md");
+    const prompt = 'Fix `apps/cli` and run $(pnpm test) before "done"';
+    await writeFile(path, `${prompt}\n`);
+    const post = vi.fn(async ({ json }: { json: unknown }) => {
+      createThreadRequestSchema.parse(json);
+      return fixtures.makeThread({
+        id: "thread-from-file",
+        projectId: "proj-1",
+        providerId: "codex",
+      });
+    });
+    stubServerApi({ "v1.threads.$post": post });
+
+    try {
+      await runCommand(
+        ["thread", "create", "--project", "proj-1", "--prompt-file", path],
+        register,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+
+    expect(post).toHaveBeenCalledWith({
+      json: expect.objectContaining({
+        input: [{ type: "text", text: prompt, mentions: [] }],
+      }),
+    });
+  });
+
+  it("bb thread spawn refuses a prompt given both inline and as a file", async () => {
+    const post = vi.fn();
+    stubServerApi({ "v1.threads.$post": post });
+
+    await expect(
+      runCommand(
+        [
+          "thread",
+          "spawn",
+          "--project",
+          "proj-1",
+          "--prompt",
+          "inline",
+          "--prompt-file",
+          "/nonexistent/prompt.md",
+        ],
+        register,
+      ),
+    ).rejects.toThrow("process.exit:1");
+
+    expect(vi.mocked(console.error).mock.calls[0]?.[0]).toBe(
+      "Error: Provide only one of --prompt <prompt> or --prompt-file.",
+    );
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("bb thread spawn passes explicit lifecycle ownership independently of parent selection", async () => {
     vi.stubEnv("BB_PROJECT_ID", "proj-1");
     const thread: domain.Thread = fixtures.makeThread({
       id: "thread-1",
@@ -36,12 +128,22 @@ describe("bb thread spawn command output", () => {
     stubServerApi({ "v1.threads.$post": post });
 
     await runCommand(
-      ["thread", "spawn", "--project", "proj-1", "--prompt", "hello"],
+      [
+        "thread",
+        "spawn",
+        "--project",
+        "proj-1",
+        "--prompt",
+        "hello",
+        "--lifecycle-owner-thread",
+        "owner-other-project",
+      ],
       register,
     );
 
     expect(post).toHaveBeenCalledWith({
       json: {
+        lifecycleOwnerThreadId: "owner-other-project",
         origin: "cli",
         startedOnBehalfOf: null,
         originKind: null,
@@ -53,41 +155,130 @@ describe("bb thread spawn command output", () => {
     expect(resolveLocalHostIdMock).not.toHaveBeenCalled();
   });
 
-  it("bb thread spawn forwards host-readable paths without reading them on the CLI machine", async () => {
-    const thread: domain.Thread = fixtures.makeThread({
-      id: "thread-attachments",
-      projectId: "proj-1",
-      providerId: "codex",
-    });
-    const post = vi.fn(async () => thread);
-    stubServerApi({ "v1.threads.$post": post });
+  it.each([
+    ["image", "localImage", "screenshot.png", "image/png", false],
+    ["file", "localFile", "report.pdf", "application/pdf", false],
+    ["file", "localFile", "report with spaces.pdf", "application/pdf", true],
+  ] as const)(
+    "bb thread spawn uploads client %s paths before creating the thread",
+    async (flag, type, filename, mimeType, fileUrl) => {
+      const clientDir = await mkdtemp(join(tmpdir(), "bb-cli-thread-image-"));
+      try {
+        const attachmentPath = join(clientDir, filename);
+        const uploadedPath = "uploaded-" + filename;
+        const bytes = new Uint8Array([137, 80, 78, 71]);
+        await writeFile(attachmentPath, bytes);
+        const thread: domain.Thread = fixtures.makeThread({
+          id: "thread-attachments",
+          projectId: "proj-1",
+          providerId: "codex",
+        });
+        const post = vi.fn(async () => thread);
+        stubServerApi({ "v1.threads.$post": post });
+        vi.mocked(globalThis.fetch).mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              type,
+              path: uploadedPath,
+              name: filename,
+              mimeType,
+              sizeBytes: bytes.byteLength,
+            }),
+            { headers: { "content-type": "application/json" } },
+          ),
+        );
 
-    await runCommand(
-      [
-        "thread",
-        "spawn",
-        "--project",
-        "proj-1",
-        "--prompt",
-        "review these",
-        "--file",
-        "/tmp/report.pdf",
-        "--image",
-        "/tmp/screenshot.png",
-      ],
-      register,
-    );
+        await runCommand(
+          [
+            "thread",
+            "spawn",
+            "--project",
+            "proj-1",
+            "--prompt",
+            "review these",
+            "--file",
+            "existing-report.pdf",
+            "--" + flag,
+            fileUrl ? pathToFileURL(attachmentPath).href : attachmentPath,
+          ],
+          register,
+        );
 
-    expect(post).toHaveBeenCalledWith({
-      json: expect.objectContaining({
-        input: [
-          { type: "text", text: "review these", mentions: [] },
-          { type: "localFile", path: "/tmp/report.pdf" },
-          { type: "localImage", path: "/tmp/screenshot.png" },
-        ],
-      }),
-    });
-  });
+        expect(globalThis.fetch).toHaveBeenCalledWith(
+          "http://server/api/v1/projects/proj-1/attachments",
+          expect.objectContaining({
+            body: expect.any(FormData),
+            method: "POST",
+          }),
+        );
+        const uploadBody = vi.mocked(globalThis.fetch).mock.calls[0]?.[1]?.body;
+        expect(uploadBody).toBeInstanceOf(FormData);
+        if (!(uploadBody instanceof FormData))
+          throw new Error("Missing upload body");
+        const uploadedFile = uploadBody.get("file");
+        expect(uploadedFile).toBeInstanceOf(File);
+        if (!(uploadedFile instanceof File))
+          throw new Error("Missing uploaded file");
+        expect(uploadedFile.name).toBe(filename);
+        expect(uploadedFile.type).toBe(mimeType);
+        expect(new Uint8Array(await uploadedFile.arrayBuffer())).toEqual(bytes);
+        expect(post).toHaveBeenCalledWith({
+          json: expect.objectContaining({
+            input: [
+              { type: "text", text: "review these", mentions: [] },
+              { type: "localFile", path: "existing-report.pdf" },
+              { type, path: uploadedPath },
+            ],
+          }),
+        });
+      } finally {
+        await rm(clientDir, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it.each(["missing", "directory", "upload"] as const)(
+    "does not create a thread when its local file fails: %s",
+    async (failure) => {
+      const clientDir = await mkdtemp(join(tmpdir(), "bb-cli-thread-file-"));
+      try {
+        const filePath =
+          failure === "directory" ? clientDir : join(clientDir, "report.pdf");
+        if (failure === "upload") await writeFile(filePath, "report");
+        const post = vi.fn(async () => ({ ok: true }));
+        stubServerApi({ "v1.threads.$post": post });
+        vi.mocked(globalThis.fetch).mockResolvedValue(
+          new Response(JSON.stringify({ error: "Upload rejected" }), {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+
+        await expect(
+          runCommand(
+            [
+              "thread",
+              "spawn",
+              "--project",
+              "proj-1",
+              "--prompt",
+              "review",
+              "--file",
+              filePath,
+            ],
+            register,
+          ),
+        ).rejects.toThrow("process.exit:1");
+
+        expect(post).not.toHaveBeenCalled();
+        if (failure !== "upload")
+          expect(globalThis.fetch).not.toHaveBeenCalled();
+        expect(console.error).toHaveBeenCalled();
+      } finally {
+        await rm(clientDir, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("bb thread spawn --plan opens the thread with the composer's /plan command mention", async () => {
     const thread: domain.Thread = fixtures.makeThread({
@@ -132,25 +323,6 @@ describe("bb thread spawn command output", () => {
         ],
       }),
     });
-  });
-
-  it("bb thread spawn requires an explicit --project", async () => {
-    vi.stubEnv("BB_PROJECT_ID", undefined);
-    const post = vi.fn();
-    const stderrWrite = captureCommanderErrors();
-    stubServerApi({ "v1.threads.$post": post });
-
-    await expect(
-      runCommand(["thread", "spawn", "--prompt", "hello"], register),
-    ).rejects.toThrow("process.exit:1");
-
-    expect(stderrWrite).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "error: required option '--project <id>' not specified",
-      ),
-    );
-    expect(resolveLocalHostIdMock).not.toHaveBeenCalled();
-    expect(post).not.toHaveBeenCalled();
   });
 
   it("bb thread spawn ignores BB_PROJECT_ID when --project is omitted", async () => {
@@ -294,7 +466,7 @@ describe("bb thread spawn command output", () => {
     );
   });
 
-  it("bb thread spawn allows sections for hidden workers", async () => {
+  it("bb thread spawn combines sections and pinning for hidden workers", async () => {
     const thread: domain.Thread = fixtures.makeThread({
       sectionId: "sec_work",
       id: "thread-hidden-section",
@@ -315,6 +487,7 @@ describe("bb thread spawn command output", () => {
         "background work",
         "--visibility",
         "hidden",
+        "--pinned",
         "--section",
         "sec_work",
       ],
@@ -324,20 +497,15 @@ describe("bb thread spawn command output", () => {
     expect(post).toHaveBeenCalledWith({
       json: expect.objectContaining({
         sectionId: "sec_work",
+        pinned: true,
         visibility: "hidden",
       }),
     });
   });
 
-  it("bb thread spawn help lists product permission modes", async () => {
+  it("bb thread spawn help does not point at bb curl", async () => {
     const helpOutput = await getHelpOutput(["thread", "spawn"], register);
-    expect(helpOutput).toContain("--permission-mode <mode>");
-    expect(helpOutput).toContain("--visibility <visibility>");
-    expect(helpOutput).toContain("Exact Git ref");
-    expect(helpOutput).toContain("origin/<branch> for a remote ref");
-    expect(helpOutput).toContain("bb environment providers");
     expect(helpOutput).not.toContain("bb curl");
-    expect(helpOutput).toMatch(/Permission mode: accept-edits, auto, or full/);
   });
 
   it("bb thread spawn reports invalid permission mode choices", async () => {

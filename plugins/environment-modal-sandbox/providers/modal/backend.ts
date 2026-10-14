@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  DEFAULT_SANDBOX_SIZE,
   SANDBOX_LIFETIME_MS,
   type ResolvedSettings,
   type SettingsResolution,
@@ -260,7 +261,7 @@ export function createModalSandboxBackend(
               context.signal,
             );
       context.signal.throwIfAborted();
-      context.report.step("Creating the Modal Sandbox…");
+      context.report.step("Creating the sandbox…");
       const sandbox = await retryModalApi(async () => {
         const existing = await client.fromName(resolved.appName, context.key);
         return (
@@ -270,8 +271,9 @@ export function createModalSandboxBackend(
             name: context.key,
             image: { type: "image", imageId },
             timeoutMs: SANDBOX_LIFETIME_MS,
-            cpu: selection.preset?.cpu ?? null,
-            memoryMiB: selection.preset?.memoryMiB ?? null,
+            cpu: selection.preset?.cpu ?? DEFAULT_SANDBOX_SIZE.cpu,
+            memoryMiB:
+              selection.preset?.memoryMiB ?? DEFAULT_SANDBOX_SIZE.memoryMiB,
             tags: { bbMachineKey: context.key },
           })
         );
@@ -283,8 +285,8 @@ export function createModalSandboxBackend(
         imageId,
         accountIdentity,
         appName: resolved.appName,
-        cpu: selection.preset?.cpu ?? 0.125,
-        memoryMiB: selection.preset?.memoryMiB ?? 128,
+        cpu: selection.preset?.cpu ?? DEFAULT_SANDBOX_SIZE.cpu,
+        memoryMiB: selection.preset?.memoryMiB ?? DEFAULT_SANDBOX_SIZE.memoryMiB,
         key: context.key,
         sandboxId: sandbox.sandboxId,
         snapshotImageId: null,
@@ -323,7 +325,7 @@ export function createModalSandboxBackend(
           context.checkpoint,
         );
       }
-      context.report.step("Saving the Modal filesystem…");
+      context.report.step("Snapshotting the filesystem…");
       const snapshotStartedAt = deps.now();
       const snapshotImageId = await sandbox.snapshotFilesystem({
         timeoutMs: SNAPSHOT_TIMEOUT_MS,
@@ -361,7 +363,7 @@ export function createModalSandboxBackend(
       let sandbox = await findSandbox(resource, resolved);
       if (sandbox === null) {
         const snapshotImageId = requireRestorableSnapshot(resource);
-        context.report.step("Restoring the Modal sandbox…");
+        context.report.step("Restoring the sandbox…");
         sandbox = await clientFor(resolved).create({
           appName: resource.appName,
           name: resource.key,

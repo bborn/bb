@@ -32,19 +32,6 @@ describe("definePluginApp", () => {
 });
 
 describe("collectPluginAppRegistrations — experimental_appOverlay", () => {
-  it("collects additive app overlays", () => {
-    const definition = definePluginApp((app) => {
-      app.slots.experimental_appOverlay({
-        id: "office",
-        component: Component,
-      });
-    });
-
-    expect(collectPluginAppRegistrations(definition).appOverlays).toEqual([
-      { id: "office", component: Component },
-    ]);
-  });
-
   it("rejects duplicate ids and malformed components", () => {
     const duplicate = definePluginApp((app) => {
       app.slots.experimental_appOverlay({
@@ -69,6 +56,77 @@ describe("collectPluginAppRegistrations — experimental_appOverlay", () => {
     expect(() => collectPluginAppRegistrations(malformed)).toThrow(
       '"component" must be a React component function',
     );
+  });
+});
+
+describe("collectPluginAppRegistrations — experimental_threadAction", () => {
+  const item = () => null;
+  const useData = () => 1;
+
+  it("collects a thread action with its hooks", () => {
+    const definition = definePluginApp((app) => {
+      app.slots.experimental_threadAction({
+        id: "notifications",
+        title: "Notifications",
+        icon: "Notification",
+        group: "3_settings",
+        order: 5,
+        useData,
+        item,
+      });
+    });
+    expect(collectPluginAppRegistrations(definition).threadActions).toEqual([
+      {
+        id: "notifications",
+        title: "Notifications",
+        icon: "Notification",
+        group: "3_settings",
+        order: 5,
+        useData,
+        item,
+      },
+    ]);
+  });
+
+  it("rejects two thread actions with the same id", () => {
+    const definition = definePluginApp((app) => {
+      app.slots.experimental_threadAction({
+        id: "a",
+        title: "One",
+        icon: "Pin",
+        group: "2_organize",
+        item,
+      });
+      app.slots.experimental_threadAction({
+        id: "a",
+        title: "Two",
+        icon: "Pin",
+        group: "2_organize",
+        item,
+      });
+    });
+    expect(() => collectPluginAppRegistrations(definition)).toThrow(/"a"/);
+  });
+
+  it.each([
+    ["item", { item: null }, '"item" must be a function'],
+    ["useData", { item, useData: 1 }, '"useData" must be a function'],
+    ["icon", { item, icon: "" }, "icon"],
+    ["group", { item, group: "" }, "group"],
+    ["order", { item, order: Number.NaN }, '"order" must be a finite number'],
+  ])("rejects a malformed %s", (_field, fields, message) => {
+    const definition = definePluginApp((app) => {
+      app.slots.experimental_threadAction({
+        id: "a",
+        title: "One",
+        icon: "Pin",
+        group: "2_organize",
+        ...fields,
+      } as unknown as Parameters<
+        typeof app.slots.experimental_threadAction
+      >[0]);
+    });
+    expect(() => collectPluginAppRegistrations(definition)).toThrow(message);
   });
 });
 
@@ -130,6 +188,37 @@ describe("collectPluginAppRegistrations — experimental_threadHeaderAction", ()
       } as never);
     });
     expect(() => collectPluginAppRegistrations(definition)).toThrow(/title/);
+  });
+});
+
+describe("collectPluginAppRegistrations — experimental_browserToolbarAction", () => {
+  it("collects a browser toolbar action", () => {
+    const definition = definePluginApp((app) => {
+      app.slots.experimental_browserToolbarAction({
+        id: "annotate",
+        title: "Annotate",
+        component: Component,
+      });
+    });
+    expect(
+      collectPluginAppRegistrations(definition).browserToolbarActions,
+    ).toEqual([{ id: "annotate", title: "Annotate", component: Component }]);
+  });
+
+  it("rejects duplicate browser toolbar action ids", () => {
+    const definition = definePluginApp((app) => {
+      app.slots.experimental_browserToolbarAction({
+        id: "annotate",
+        title: "One",
+        component: Component,
+      });
+      app.slots.experimental_browserToolbarAction({
+        id: "annotate",
+        title: "Two",
+        component: Component,
+      });
+    });
+    expect(() => collectPluginAppRegistrations(definition)).toThrow(/annotate/);
   });
 });
 
@@ -445,6 +534,7 @@ describe("collectPluginAppRegistrations", () => {
       });
       app.slots.settingsSection({
         id: "custom-settings",
+        experimental_page: "mobile",
         title: "Custom settings",
         component: Component,
       });
@@ -514,6 +604,7 @@ describe("collectPluginAppRegistrations", () => {
     expect(registrations.settingsSections).toEqual([
       {
         id: "custom-settings",
+        experimental_page: "mobile",
         title: "Custom settings",
         component: Component,
       },
@@ -593,14 +684,17 @@ describe("collectPluginAppRegistrations", () => {
         id: "bad-scope",
         scopes: ["modal" as never],
       });
-      app.composer.customize({ id: "valid-last", scopes: ["side-chat"] });
+      app.composer.customize({
+        id: "valid-last",
+        scopes: ["side-chat" as never, "thread"],
+      });
     });
 
     const registrations = collectPluginAppRegistrations(definition, rejected);
 
     expect(registrations.composerCustomizations).toEqual([
       { id: "valid-first" },
-      { id: "valid-last", scopes: ["side-chat"] },
+      { id: "valid-last", scopes: ["thread"] },
     ]);
     expect(rejected.mock.calls.map(([reason]) => reason)).toEqual([
       expect.stringContaining('"id" must match'),

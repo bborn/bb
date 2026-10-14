@@ -1,8 +1,6 @@
 import {
   createEnvironment,
   getEnvironment,
-  getAppSettings,
-  setAppSettings,
   updateHost,
 } from "@bb/db";
 import { rm, writeFile } from "node:fs/promises";
@@ -21,6 +19,7 @@ import {
 } from "../helpers/commands.js";
 import { seedHostSession, seedProjectWithSource } from "../helpers/seed.js";
 import { withTestHarness } from "../helpers/test-app.js";
+import { ApiError } from "../../src/errors.js";
 
 describe("live host command logging", () => {
   it("logs expected live command failures without calling warning handlers", async () => {
@@ -77,12 +76,44 @@ describe("live host command logging", () => {
   });
 });
 
+it("preserves provisioning when the host transport disappears", async () => {
+  await withTestHarness(async (harness) => {
+    const { host } = seedHostSession(harness.deps);
+    const { project } = seedProjectWithSource(harness.deps, {
+      hostId: host.id,
+    });
+    const environment = createEnvironment(harness.db, harness.hub, {
+      projectId: project.id,
+      hostId: host.id,
+      providerOwnsPath: false,
+    });
+    const command = buildEnvironmentProvisionCommand({
+      environmentId: environment.id,
+      hostId: host.id,
+      initiator: null,
+      path: "/tmp/preserve-disconnected-setup",
+      setupScriptTimeoutMs: null,
+    });
+    vi.spyOn(harness.hub, "requestHostOnlineRpc").mockRejectedValue(
+      new ApiError(502, "host_unavailable", "Host is not connected"),
+    );
+
+    await expect(
+      runLiveHostCommand(harness.deps, {
+        command,
+        hostId: host.id,
+        preserveOnHostUnavailable: true,
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow("Host is not connected");
+    expect(getEnvironment(harness.db, environment.id)?.status).toBe(
+      "provisioning",
+    );
+  });
+});
+
 it("resolves fresh setup values at dispatch without retaining them in the request", async () => {
   await withTestHarness(async (harness) => {
-    setAppSettings(harness.db, {
-      ...getAppSettings(harness.db),
-      machineGitCredentialsEnabled: false,
-    });
     const { host } = seedHostSession(harness.deps);
     updateHost(harness.db, harness.hub, host.id, {
       machineProviderId: "manual",
@@ -157,17 +188,18 @@ it("resolves fresh setup values at dispatch without retaining them in the reques
       timeoutMs: 1000,
     });
     expect(request.mock.lastCall?.[0].message.command).toMatchObject({
-      contributedEnv: [],
+      contributedEnv: [
+        expect.objectContaining({
+          name: "SETUP_VALUE",
+          value: "refreshed-secret",
+        }),
+      ],
     });
   });
 });
 
 it("fails provisioning if saved setup variables cannot be decrypted", async () => {
   await withTestHarness(async (harness) => {
-    setAppSettings(harness.db, {
-      ...getAppSettings(harness.db),
-      machineGitCredentialsEnabled: false,
-    });
     const { host } = seedHostSession(harness.deps);
     updateHost(harness.db, harness.hub, host.id, {
       machineProviderId: "manual",
