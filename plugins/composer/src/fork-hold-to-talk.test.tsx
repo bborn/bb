@@ -15,7 +15,7 @@ import type {
 } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useForkHoldToTalk } from "./fork-hold-to-talk";
-import type { PromptVoiceConfig } from "./fork-hold-to-talk";
+import type { ExperimentalComposerVoice } from "@get-bb/plugin-sdk/app";
 
 const MIC_RECT = { left: 300, top: 600, width: 40, height: 40 };
 
@@ -32,7 +32,7 @@ function createHandlers() {
 }
 
 interface HarnessProps {
-  voiceState: PromptVoiceConfig["state"];
+  voiceState: ExperimentalComposerVoice["state"];
   isPointerCoarse?: boolean;
   canSubmit?: boolean;
   handlers: ReturnType<typeof createHandlers>;
@@ -44,9 +44,15 @@ function Harness({
   canSubmit = false,
   handlers,
 }: HarnessProps) {
-  const voice: PromptVoiceConfig = {
+  const voice: ExperimentalComposerVoice = {
     state: voiceState,
+    delivery: "transcribe" as ExperimentalComposerVoice["delivery"],
     microphoneWarning: null,
+    unsupportedMessage: "",
+    failedRecordings: [],
+    retry: vi.fn(),
+    discard: vi.fn(),
+    download: vi.fn(),
     isSupported: true,
     stream: null,
     start: handlers.start,

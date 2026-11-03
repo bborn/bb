@@ -1,13 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { createThreadTimelineCache } from "./timeline-cache.js";
 
-function responseWithRows(rowCount: number): { rows: number[] } {
+type TestResponse = { rows: number[] };
+
+function responseWithRows(rowCount: number): TestResponse {
   return { rows: Array.from({ length: rowCount }, (_, index) => index) };
 }
 
 describe("createThreadTimelineCache", () => {
   it("serves repeated requests for large timelines from the cache", () => {
-    const cache = createThreadTimelineCache();
+    const cache = createThreadTimelineCache<TestResponse>();
     const build = vi.fn(() => responseWithRows(378));
 
     const first = cache.getOrBuild("thr_a", "thr_a|1", build);
@@ -18,7 +20,7 @@ describe("createThreadTimelineCache", () => {
   });
 
   it("does not retain responses above the cacheable row limit", () => {
-    const cache = createThreadTimelineCache({ maxCacheableRows: 100 });
+    const cache = createThreadTimelineCache<TestResponse>({ maxCacheableRows: 100 });
     const build = vi.fn(() => responseWithRows(101));
 
     cache.getOrBuild("thr_a", "thr_a|1", build);
@@ -29,7 +31,7 @@ describe("createThreadTimelineCache", () => {
   });
 
   it("evicts the oldest entries to stay within the total row budget", () => {
-    const cache = createThreadTimelineCache({
+    const cache = createThreadTimelineCache<TestResponse>({
       maxCacheableRows: 500,
       maxTotalRows: 1_000,
     });
@@ -45,7 +47,7 @@ describe("createThreadTimelineCache", () => {
   });
 
   it("keeps a single entry that exceeds the total row budget on its own", () => {
-    const cache = createThreadTimelineCache({
+    const cache = createThreadTimelineCache<TestResponse>({
       maxCacheableRows: 500,
       maxTotalRows: 300,
     });
@@ -58,7 +60,7 @@ describe("createThreadTimelineCache", () => {
   });
 
   it("releases the row budget when a thread is invalidated", () => {
-    const cache = createThreadTimelineCache({
+    const cache = createThreadTimelineCache<TestResponse>({
       maxCacheableRows: 500,
       maxTotalRows: 1_000,
     });
