@@ -67,9 +67,54 @@ export interface PluginHomepageSectionProps {
 /**
  * Props passed to a `settingsSection` component.
  *
- * Deliberately empty in V1; versioned additive like the other slot props.
+ * Versioned additive like the other slot props.
  */
-export interface PluginSettingsSectionProps {}
+export interface PluginSettingsSectionProps {
+  /**
+   * Internal to bb's bundled connect plugin; not part of the plugin API.
+   * Set only when the setup guide renders the section; call it when the user
+   * starts setting it up.
+   */
+  internal_DO_NOT_USE_onSetupStarted?: () => void;
+  /**
+   * Internal to bb's bundled connect plugin; not part of the plugin API.
+   * Set only when the setup guide renders the section; call it when a setup
+   * attempt fails, with the stage that failed and, when known, why.
+   */
+  internal_DO_NOT_USE_onSetupFailed?: (
+    stage: InternalDoNotUseSetupFailureStage,
+    detail?: InternalDoNotUseSetupFailureDetail,
+  ) => void;
+}
+
+/**
+ * Stage of a setup guide section's setup attempt that failed.
+ * Internal to bb's bundled connect plugin; not part of the plugin API.
+ */
+export type InternalDoNotUseSetupFailureStage =
+  | "sign_in"
+  | "pairing"
+  | "turn_on";
+
+/**
+ * Why a setup guide section's setup attempt failed: a fixed code, never a
+ * message. Internal to bb's bundled connect plugin; not part of the plugin API.
+ */
+export type InternalDoNotUseSetupFailureDetail =
+  | "denied"
+  | "expired"
+  | "login_failed"
+  | "rate_limited"
+  | "service_unavailable"
+  | "account_unavailable"
+  | "network"
+  | "invalid_code"
+  | "expired_code"
+  | "already_used"
+  | "unauthorized"
+  | "profile_unavailable"
+  | "superseded"
+  | "other";
 
 /**
  * Props passed to an `experimental_appOverlay` component.
@@ -78,6 +123,22 @@ export interface PluginSettingsSectionProps {}
  * hooks; versioned additive like the other slot props.
  */
 export interface ExperimentalAppOverlayProps {}
+
+/**
+ * Props passed to an `internal_DO_NOT_USE_setupGuideSection` component.
+ * Internal to bb's bundled connect plugin; not part of the plugin API.
+ */
+export interface InternalDoNotUseSetupGuideSectionProps {
+  /** True when the setup guide is open on a phone. */
+  onPhone: boolean;
+  /** Call when the user starts setting up this section. */
+  onSetupStarted: () => void;
+  /** Call when a setup attempt fails, with the stage that failed and, when known, why. */
+  onSetupFailed: (
+    stage: InternalDoNotUseSetupFailureStage,
+    detail?: InternalDoNotUseSetupFailureDetail,
+  ) => void;
+}
 
 export type ExperimentalPageTitle = (
   | { title: string; breadcrumbs?: never }
@@ -886,6 +947,16 @@ export interface ExperimentalAppOverlayRegistration {
 }
 
 /**
+ * Render one row in the first-run setup guide's "Where you use bb" group.
+ * Internal to bb's bundled connect plugin; not part of the plugin API.
+ */
+export interface InternalDoNotUseSetupGuideSectionRegistration {
+  /** Unique within the plugin; letters, digits, `-`, `_`. */
+  id: string;
+  component: ComponentType<InternalDoNotUseSetupGuideSectionProps>;
+}
+
+/**
  * A name the host resolves to a glyph, in this order: a name any plugin
  * registered with `app.experimental_icons.register()`, then a built-in BB icon
  * name (`"Zap"`), then a namespaced `"<pluginId>/<name>"` glyph naming an
@@ -1017,6 +1088,22 @@ export interface PluginNavPanelRegistration {
    * throwing headerContent is hidden without breaking the title bar.
    */
   headerContent?: ComponentType<PluginNavPanelProps>;
+  /**
+   * Component rendered in the shared title bar instead of the panel icon,
+   * title and `experimental_usePageTitle` text, such as a breadcrumb. The
+   * window title still comes from `experimental_usePageTitle` or the panel
+   * title. A crash restores the default title without breaking the page.
+   * Experimental: see docs/api_to_audit.md.
+   */
+  experimental_headerTitle?: ComponentType<PluginNavPanelProps>;
+  /**
+   * When true, the panel gets no navigation entry (sidebar, rail, More and
+   * the navigation arrangement) and no command palette entry. Its route
+   * `/plugins/<pluginId>/<path>/*` still renders with its title bar, right
+   * panel and splits; open it with `useBbNavigate().toPluginPanel(path)`.
+   * Experimental: see docs/api_to_audit.md.
+   */
+  experimental_hideFromNavigation?: boolean;
 }
 
 /**
@@ -1281,7 +1368,7 @@ export interface ExperimentalSidebarFooter {
 
 /**
  * The one status bb would paint for a thread, already resolved through the
- * host's precedence (attention before work; plan and goal before the generic
+ * host's precedence (attention before work; plan mode before the generic
  * spinner). Draw it with {@link PluginSdkApp.experimental_ThreadStatusGlyph},
  * or resolve a row that folds in more through
  * {@link PluginSdkApp.experimental_resolveThreadStatus}.
@@ -1304,7 +1391,6 @@ export type PluginSidebarThreadIndicator =
   | "background-agent"
   | "background-command"
   | "plan-mode"
-  | "goal"
   | "runtime"
   | "queued-failed"
   | "draft"
@@ -1318,7 +1404,6 @@ export interface PluginSidebarThreadActivity {
   backgroundAgents: number;
   backgroundCommands: number;
   planMode: number;
-  goals: number;
 }
 
 /**
@@ -1976,6 +2061,40 @@ export interface ExperimentalThreadContextSegmentRegistration {
 }
 
 /**
+ * The dismiss button of an {@link ExperimentalCollapsibleStackCardProps}
+ * card, such as exiting Plan mode or clearing a Goal. The host disables it
+ * and shows a spinner until `onDismiss` settles, and shows an error toast
+ * built from the rejection, or `failureMessage` when the error has no message
+ * of its own.
+ */
+export interface ExperimentalCollapsibleStackCardDismiss {
+  /** Accessible name of the dismiss button, e.g. `"Clear Goal"`. */
+  label: string;
+  failureMessage: string;
+  onDismiss(): Promise<void>;
+}
+
+/**
+ * Props of the host-owned `experimental_CollapsibleStackCard`: bb's
+ * collapsible card for the stack above a thread's composer, the one bb's Plan
+ * mode card uses. The header shows `icon` and `title` and toggles `children`;
+ * the card starts collapsed.
+ */
+export interface ExperimentalCollapsibleStackCardProps {
+  /** Accessible name of the card and its toggle, e.g. `"Goal"`. */
+  label: string;
+  /** Header text, e.g. `"Goal paused"`. */
+  title: string;
+  icon: BbIconName;
+  /** True draws the header in bb's working style; false draws it muted. */
+  isActive: boolean;
+  /** Adds a dismiss button to the header; omit for none. */
+  dismiss?: ExperimentalCollapsibleStackCardDismiss;
+  /** Shown while the card is expanded. */
+  children: ReactNode;
+}
+
+/**
  * A row in the thread Info tab's details block, beside bb's own rows. Render
  * one or more `experimental_DetailRow` elements, or null to show nothing for
  * this thread. A crash removes only this row for that thread.
@@ -2015,6 +2134,60 @@ export interface ExperimentalThreadInfoSectionRegistration {
   group: string;
   order?: number;
   component: ComponentType<ExperimentalThreadInfoProps>;
+}
+
+/**
+ * Props passed to an `experimental_threadHeaderRow` component, rendered
+ * between a thread's header and its timeline.
+ */
+export interface ExperimentalThreadHeaderRowProps {
+  /**
+   * The thread shown in the pane. A split layout renders a header row per
+   * pane, so the component mounts once per visible thread; keep per-thread
+   * state in the component, never in a module-level singleton.
+   */
+  threadId: string;
+  projectId: string;
+  /** The thread's environment, null when it has none. */
+  environment: ExperimentalThreadEnvironment | null;
+}
+
+/**
+ * A full-width row directly under the header of every thread pane, above the
+ * timeline, such as a tab strip of the threads that share an environment.
+ * Rows stack in order. Return null to take no space for this thread. A crash
+ * removes only this row for that thread.
+ */
+export interface ExperimentalThreadHeaderRowRegistration {
+  /** Unique within the plugin; letters, digits, `-`, `_`. */
+  id: string;
+  /** Ascending; unset sorts last; ties keep registration order. */
+  order?: number;
+  component: ComponentType<ExperimentalThreadHeaderRowProps>;
+}
+
+/**
+ * Props passed to an `experimental_threadHeaderTitle` component, the same
+ * props a header row receives.
+ */
+export type ExperimentalThreadHeaderTitleProps =
+  ExperimentalThreadHeaderRowProps;
+
+/**
+ * Replaces the thread title text in the header of every thread pane, such as
+ * a `project › workspace` breadcrumb. bb keeps the rest of the header: the
+ * Thread actions menu after the title, header actions, pane controls, the
+ * right-panel toggle and the window drag region. While the user renames the
+ * thread, bb shows its rename field instead. Double-click does not start a
+ * rename on a plugin title, and dragging a split pane starts only from parts
+ * that are not links, buttons or inputs. When several plugins register one,
+ * the first in plugin order wins. A crash shows bb's title for that thread.
+ * The window title stays the thread title.
+ */
+export interface ExperimentalThreadHeaderTitleRegistration {
+  /** Unique within the plugin; letters, digits, `-`, `_`. */
+  id: string;
+  component: ComponentType<ExperimentalThreadHeaderTitleProps>;
 }
 
 /**
@@ -3768,6 +3941,14 @@ export interface PluginAppSlots {
   experimental_appOverlay(
     registration: ExperimentalAppOverlayRegistration,
   ): void;
+  /**
+   * Render a setup guide row (see
+   * {@link InternalDoNotUseSetupGuideSectionRegistration}). Internal: see
+   * docs/api_to_audit.md.
+   */
+  internal_DO_NOT_USE_setupGuideSection(
+    registration: InternalDoNotUseSetupGuideSectionRegistration,
+  ): void;
   navPanel(registration: PluginNavPanelRegistration): void;
   /** Register a context-scoped tab. Experimental: see docs/api_to_audit.md. */
   experimental_tab<
@@ -3830,6 +4011,22 @@ export interface PluginAppSlots {
    */
   experimental_threadInfoSection(
     registration: ExperimentalThreadInfoSectionRegistration,
+  ): void;
+  /**
+   * Add a full-width row under the header of every thread pane, above the
+   * timeline (see {@link ExperimentalThreadHeaderRowRegistration}).
+   * Experimental: see docs/api_to_audit.md.
+   */
+  experimental_threadHeaderRow(
+    registration: ExperimentalThreadHeaderRowRegistration,
+  ): void;
+  /**
+   * Replace the thread title text in the header of every thread pane (see
+   * {@link ExperimentalThreadHeaderTitleRegistration}). Experimental: see
+   * docs/api_to_audit.md.
+   */
+  experimental_threadHeaderTitle(
+    registration: ExperimentalThreadHeaderTitleRegistration,
   ): void;
   /**
    * Add a row to the thread context card of every thread pane (see
@@ -5280,14 +5477,16 @@ export interface BbNavigate {
   }): void;
   /**
    * Open an HTTP(S) URL using this client's BB browser preference, or request
-   * an application link on this device with confirmation unless its scheme is approved when
-   * the applicationLinks experiment is enabled. Returns false
+   * an application link on this device with confirmation unless its scheme is
+   * approved. Returns false
    * for blocked or unsupported schemes. True means handled, not launched. See
    * docs/api_to_audit.md.
    */
   openUrl(url: string): boolean;
   /** Open a live file in this surface's shared BB preview panel. */
-  experimental_openFilePreview(options: ExperimentalFilePreviewOptions): boolean;
+  experimental_openFilePreview(
+    options: ExperimentalFilePreviewOptions,
+  ): boolean;
   /** Open a live file in this client's preferred external file target. */
   experimental_openFileExternally(
     options: ExperimentalFileOpenOptions,
@@ -5546,6 +5745,15 @@ export interface PluginSdkApp {
    * Experimental: see docs/api_to_audit.md.
    */
   experimental_useThreadContextKind(): ExperimentalThreadContextKind;
+  /**
+   * The latest state the calling plugin's provider bridge emitted for one of
+   * its declared extension kinds on a thread (`kind` is the local name from
+   * `extensionKinds`, without the plugin id), or null when there is none or
+   * the last state was null. Follows live updates while bb shows the thread.
+   * The value is whatever passed the kind's `state` schema; parse it before
+   * use. Experimental: see docs/api_to_audit.md.
+   */
+  experimental_useThreadExtensionState(threadId: string, kind: string): unknown;
   useBbContext(): BbContext;
   /**
    * The id of the plugin that owns the calling component: the same id
@@ -6014,6 +6222,13 @@ export interface PluginSdkApp {
    * remembers that per registration. Experimental: see docs/api_to_audit.md.
    */
   experimental_InfoSection: ComponentType<ExperimentalInfoSectionProps>;
+  /**
+   * bb's collapsible card for the stack above a thread's composer (see
+   * {@link ExperimentalCollapsibleStackCardProps}). Render it from a
+   * thread-scoped composer banner with `chrome: "bare"`. Experimental: see
+   * docs/api_to_audit.md.
+   */
+  experimental_CollapsibleStackCard: ComponentType<ExperimentalCollapsibleStackCardProps>;
   /**
    * The thread Info tab's label and value row (see
    * {@link ExperimentalDetailRowProps}), the one bb's own rows use.

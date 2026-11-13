@@ -76,6 +76,7 @@ const hostDaemonWatchSetWorkspaceTargetSchema = z
   .object({
     environmentId: z.string().min(1),
     workspaceContext: workspaceContextSchema,
+    mergeBaseBranch: z.string().min(1).nullable(),
   })
   .strict();
 export type HostDaemonWatchSetWorkspaceTarget = z.infer<
@@ -84,7 +85,6 @@ export type HostDaemonWatchSetWorkspaceTarget = z.infer<
 
 const hostDaemonWatchSetThreadStorageTargetSchema = z
   .object({
-    environmentId: z.string().min(1),
     threadId: z.string().min(1),
   })
   .strict();
@@ -248,6 +248,7 @@ export const hostDaemonSessionOpenResponseSchema = z
     sessionId: z.string().min(1),
     machineEnvironment: machineEnvironmentSchema,
     idleProviderSessionTimeoutMinutes: idleProviderSessionTimeoutMinutesSchema,
+    agentCpuPriority: z.boolean(),
     heartbeatIntervalMs: z.number().int().positive(),
     leaseTimeoutMs: z.number().int().positive(),
     watchSet: hostDaemonWatchSetSchema.default({
@@ -384,11 +385,7 @@ export type HostDaemonEventBatchResponse = z.infer<
 
 const hostDaemonEnvironmentChangeSchema = z
   .enum(ENVIRONMENT_CHANGE_KINDS)
-  .extract([
-    "work-status-changed",
-    "git-refs-changed",
-    "thread-storage-changed",
-  ]);
+  .extract(["work-status-changed", "git-refs-changed", "git-branches-changed"]);
 export type HostDaemonEnvironmentChange = z.infer<
   typeof hostDaemonEnvironmentChangeSchema
 >;
@@ -546,6 +543,7 @@ const hostDaemonOnlineRpcResponseSuccessSchema = z.discriminatedUnion(
     onlineRpcResponseSuccessSchemaFor("host.global_skills_status"),
     onlineRpcResponseSuccessSchemaFor("host.list_branch_options"),
     onlineRpcResponseSuccessSchemaFor("host.inspect_git_source"),
+    onlineRpcResponseSuccessSchemaFor("host.inspect_git_checkout"),
     onlineRpcResponseSuccessSchemaFor("host.read_file"),
     onlineRpcResponseSuccessSchemaFor("host.read_file_chunk"),
     onlineRpcResponseSuccessSchemaFor("host.write_file"),
@@ -726,6 +724,7 @@ export const hostDaemonServerWsMessageSchema = z.discriminatedUnion("type", [
       type: z.literal("provider-session-policy.replace"),
       idleProviderSessionTimeoutMinutes:
         idleProviderSessionTimeoutMinutesSchema,
+      agentCpuPriority: z.boolean(),
     })
     .strict(),
   z
@@ -793,6 +792,13 @@ const hostDaemonEnvironmentChangeMessageSchema =
       type: z.literal("environment-change"),
     })
     .strict();
+
+const hostDaemonThreadStorageChangeMessageSchema = z
+  .object({
+    type: z.literal("thread-storage-change"),
+    threadId: z.string().min(1),
+  })
+  .strict();
 
 const hostDaemonEnvironmentMetadataChangeMessageSchema =
   hostDaemonEnvironmentMetadataChangePayloadSchema
@@ -910,6 +916,7 @@ export const hostDaemonDaemonWsMessageSchema = z.union([
   hostDaemonMachineShutdownAckMessageSchema,
   hostDaemonHeartbeatMessageSchema,
   hostDaemonEnvironmentChangeMessageSchema,
+  hostDaemonThreadStorageChangeMessageSchema,
   hostDaemonEnvironmentMetadataChangeMessageSchema,
   hostDaemonConnectTunnelIdentityMessageSchema,
   hostDaemonConnectNextStatusMessageSchema,

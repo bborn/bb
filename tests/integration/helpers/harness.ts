@@ -8,7 +8,12 @@ import { serve } from "@hono/node-server";
 import {
   ensurePersonalProject,
   getExperiments,
+  getAutoAppUpdate,
+  getSkippedAppUpdate,
+  setAutoAppUpdate,
+  setSkippedAppUpdate,
   listRunningThreads,
+  startWalCheckpointer,
   type DbConnection,
 } from "@bb/db";
 import { createMigratedConnection } from "@bb/db/testing";
@@ -43,11 +48,13 @@ import { SkillTreeRegistry } from "../../../apps/server/src/services/skills/inje
 import { PluginHostArtifactRegistry } from "../../../apps/server/src/services/plugins/plugin-host-artifact-registry.js";
 import { createAppUpdateService } from "../../../apps/server/src/services/system/app-update.js";
 import { createScheduledAppUpdateService } from "../../../apps/server/src/services/system/app-update-schedule.js";
+import { createAppUpdateSendHold } from "../../../apps/server/src/services/system/app-update-send-hold.js";
 import { createCliCommandService } from "../../../apps/server/src/services/system/cli-command.js";
 import { createAppVersionService } from "../../../apps/server/src/services/system/app-version.js";
 import { createProviderNativeRootsCache } from "../../../apps/server/src/services/providers/native-roots.js";
 import { createProviderLiveCommandsCache } from "../../../apps/server/src/services/providers/provider-live-commands.js";
 import { createBbAppManagedConfigReloader } from "../../../apps/server/src/services/system/bb-app-managed-config.js";
+import { createSetupGuideExperiment } from "../../../apps/server/src/services/system/setup-guide-experiment.js";
 import { createNoopTelemetryService } from "../../../apps/server/src/services/system/telemetry.js";
 import { TerminalSessionLifecycle } from "../../../apps/server/src/services/terminals/terminal-session-lifecycle.js";
 import type {
@@ -197,6 +204,7 @@ async function startIntegrationServer(
   });
 
   const db = createMigratedConnection();
+  const walCheckpointer = startWalCheckpointer({ logger: testLogger });
   ensurePersonalProject(db);
   const hub = new NotificationHub();
   const sharedPorts = new HostSharedPortCoordinator({ db, hub });
@@ -270,6 +278,7 @@ async function startIntegrationServer(
   const notifyAppUpdateChanged = (): void =>
     hub.notifySystem(["app-update-changed"]);
   const appUpdate = createScheduledAppUpdateService({
+    autoCheckMs: null,
     countRunningThreads,
     inner: createAppUpdateService({
       currentCommit: null,
@@ -281,11 +290,36 @@ async function startIntegrationServer(
       logger: testLogger,
       mode: null,
       notifyChanged: notifyAppUpdateChanged,
+      threadsResumeAfterRestart: () =>
+        getExperiments(db).resumeThreadsAfterRestart,
+      sendHold: createAppUpdateSendHold({
+        aiServices,
+        config,
+        db,
+        hub,
+        lifecycleDedupers,
+        logger: testLogger,
+        machineAuth,
+        pendingInteractions,
+        pluginHostArtifacts,
+        providerRegistry,
+        skillTreeRegistry,
+        telemetry,
+        terminalSessions,
+      }),
     }),
     isEnabled: () => getExperiments(db).updateWhenIdle,
     logger: testLogger,
     notifyChanged: notifyAppUpdateChanged,
     onChangedMessage: (listener) => hub.onChangedMessage(listener),
+    autoUpdate: {
+      get: () => getAutoAppUpdate(db),
+      set: (enabled) => setAutoAppUpdate(db, enabled),
+    },
+    skippedUpdate: {
+      get: () => getSkippedAppUpdate(db),
+      set: (key) => setSkippedAppUpdate(db, key),
+    },
   });
   const serverDeps = {
     appUpdate,
@@ -315,8 +349,17 @@ async function startIntegrationServer(
     pendingInteractions,
     sharedPorts,
     skillTreeRegistry,
+    setupGuideExperiment: await createSetupGuideExperiment({
+      dataDir: serverDataDir,
+      fetch: () => Promise.reject(new Error("no PostHog in tests")),
+      flagTimeoutMs: 1_000,
+      logger: testLogger,
+      override: null,
+      telemetry,
+    }),
     telemetry,
     terminalSessions,
+    walCheckpointer,
     watchInterests,
   };
   const { app, closeWebSockets, injectWebSocket, pluginService } = createApp(
@@ -385,6 +428,7 @@ async function startIntegrationServer(
       });
       await closeWebSockets();
       await closed;
+      await walCheckpointer.stop();
     },
   };
 }

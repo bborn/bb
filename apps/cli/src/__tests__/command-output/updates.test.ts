@@ -190,38 +190,43 @@ describe("bb updates command output", () => {
   });
 
   it("bb updates apply runs each available provider update", async () => {
-    const install = vi.fn(
-      async () =>
-        new Response(
-          [
-            JSON.stringify({
-              type: "started",
-              provider: "codex",
-              actionKind: "update",
-              command: "codex update",
-            }),
-            JSON.stringify({
-              type: "completed",
-              provider: "codex",
-              success: true,
-              exitCode: 0,
-              signal: null,
-            }),
-          ].join("\n"),
-          { status: 200 },
-        ),
-    );
+    const job = {
+      id: "job_1",
+      hostId: hosts[0].id,
+      provider: "codex",
+      actionKind: "update",
+      startedAt: 1,
+    };
+    const start = vi.fn(async () => ({ job: { ...job, state: "running" } }));
+    const get = vi.fn(async () => ({
+      job: {
+        ...job,
+        state: "completed",
+        finishedAt: 2,
+        events: [
+          { type: "started", provider: "codex", command: "codex update" },
+          {
+            type: "completed",
+            provider: "codex",
+            success: true,
+            exitCode: 0,
+            signal: null,
+          },
+        ],
+      },
+    }));
     stubServerApi({
       "v1.hosts.$get": vi.fn(async () => hosts),
       "v1.hosts.:id.provider-clis.status.$get": vi.fn(async () =>
         providerStatus({ codexNeedsUpdate: true }),
       ),
-      "v1.hosts.:id.provider-clis.install.$post": install,
+      "v1.hosts.:id.provider-clis.install-jobs.$post": start,
+      "v1.hosts.:id.provider-clis.install-jobs.:jobId.$get": get,
     });
 
     await runCommand(["updates", "apply"], register);
 
-    expect(install).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledOnce();
     expect(collectLogPayloads(vi.mocked(console.log))).toEqual([
       "Codex on workstation: running update…",
       "Codex on workstation: done",
@@ -282,8 +287,13 @@ describe("bb updates command output", () => {
 const UPDATE_WHEN_IDLE_OFF =
   'Updating when idle is off. Turn on the "Update when idle" experiment in Settings → Experiments, or run bb settings experiment updateWhenIdle true, then try again.';
 
-function systemConfig(experiments: { updateWhenIdle: boolean }) {
-  return vi.fn(async () => ({ experiments }));
+function systemConfig(experiments: {
+  resumeThreadsAfterRestart?: boolean;
+  updateWhenIdle: boolean;
+}) {
+  return vi.fn(async () => ({
+    experiments: { resumeThreadsAfterRestart: false, ...experiments },
+  }));
 }
 
 function errorResponse(status: number, body: object): Response {
@@ -298,6 +308,8 @@ function appUpdateStatus(
 ): SystemAppUpdateStatus {
   return {
     activity: { phase: "idle" },
+    autoUpdate: false,
+    availableSkipped: false,
     available: {
       behindSince: null,
       channel: "latest",
@@ -519,6 +531,32 @@ describe("bb updates app command output", () => {
     );
   });
 
+  it("bb updates app apply says running threads resume after the update when restarts resume them", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
+    const apply = vi.fn(async () => appUpdateStatus());
+    stubServerApi({
+      "v1.system.app-update.$get": vi.fn(async () =>
+        appUpdateStatus({ runningThreadCount: 2 }),
+      ),
+      "v1.system.app-update.apply.$post": apply,
+      "v1.system.config.$get": systemConfig({
+        resumeThreadsAfterRestart: true,
+        updateWhenIdle: true,
+      }),
+    });
+
+    await expect(
+      runCommand(["updates", "app", "apply"], register),
+    ).rejects.toThrow("process.exit:1");
+    expect(apply).not.toHaveBeenCalled();
+    expect(vi.mocked(console.error)).toHaveBeenCalledWith(
+      "Error: 2 threads are running. Updating restarts bb, and they resume after the update. Re-run with --when-idle to update once they finish, or --yes to update now.",
+    );
+  });
+
   it("bb updates app apply does not suggest --when-idle while its experiment is off", async () => {
     Object.defineProperty(process.stdin, "isTTY", {
       value: false,
@@ -574,7 +612,10 @@ describe("bb updates app command output", () => {
     const schedule = vi.fn(async () =>
       appUpdateStatus({
         runningThreadCount: 2,
-        scheduled: { requestedAt: "2026-10-23T00:00:00.000Z" },
+        scheduled: {
+          requestedAt: "2026-10-23T00:00:00.000Z",
+          requiredIdleMs: 5_000,
+        },
       }),
     );
     stubServerApi({
@@ -591,16 +632,19 @@ describe("bb updates app command output", () => {
     expect(apply).not.toHaveBeenCalled();
     expect(collectLogPayloads(vi.mocked(console.log))).toEqual([
       "bb will update to 0.0.33 when all threads are idle (2 running).",
-      "Run bb updates app apply --yes to update now, or bb updates app cancel to keep the current version.",
+      "Run bb updates app apply --yes to update now, or bb updates app cancel to skip this version.",
     ]);
   });
 
-  it("bb updates app shows a scheduled update", async () => {
+  it("bb updates app shows how long an automatic update waits for idle", async () => {
     stubServerApi({
       "v1.system.app-update.$get": vi.fn(async () =>
         appUpdateStatus({
           runningThreadCount: 1,
-          scheduled: { requestedAt: "2026-10-23T00:00:00.000Z" },
+          scheduled: {
+            requestedAt: "2026-10-23T00:00:00.000Z",
+            requiredIdleMs: 15 * 60_000,
+          },
         }),
       ),
     });
@@ -609,8 +653,8 @@ describe("bb updates app command output", () => {
 
     expect(collectLogPayloads(vi.mocked(console.log))).toEqual([
       "bb-app 0.0.32 -> 0.0.33",
-      "bb will update to 0.0.33 when all threads are idle (1 running).",
-      "Run bb updates app apply --yes to update now, or bb updates app cancel to keep the current version.",
+      "bb will update to 0.0.33 once no thread has run for 15 minutes (1 running).",
+      "Run bb updates app apply --yes to update now, or bb updates app cancel to skip this version.",
     ]);
   });
 
@@ -625,7 +669,10 @@ describe("bb updates app command output", () => {
           step: "Downloading bb-app 0.0.33",
           targetVersion: "0.0.33",
         },
-        scheduled: { requestedAt: "2026-10-23T00:00:00.000Z" },
+        scheduled: {
+          requestedAt: "2026-10-23T00:00:00.000Z",
+          requiredIdleMs: 5_000,
+        },
       }),
       appUpdateStatus(),
     ];
@@ -639,8 +686,34 @@ describe("bb updates app command output", () => {
 
     expect(cancel).toHaveBeenCalledTimes(2);
     expect(collectLogPayloads(vi.mocked(console.log))).toEqual([
-      "Cancelled the scheduled update.",
+      "Skipped this version until a newer one appears.",
       "No update is scheduled.",
+    ]);
+  });
+
+  it("bb updates app auto turns automatic updates on and off and reports the setting", async () => {
+    const setAuto = vi.fn(async (request: { json: { enabled: boolean } }) =>
+      appUpdateStatus({ autoUpdate: request.json.enabled }),
+    );
+    stubServerApi({
+      "v1.system.app-update.$get": vi.fn(async () =>
+        appUpdateStatus({ autoUpdate: true }),
+      ),
+      "v1.system.app-update.auto.$post": setAuto,
+    });
+
+    await runCommand(["updates", "app", "auto", "on"], register);
+    await runCommand(["updates", "app", "auto", "off"], register);
+    await runCommand(["updates", "app", "auto"], register);
+
+    expect(setAuto.mock.calls).toEqual([
+      [{ json: { enabled: true } }],
+      [{ json: { enabled: false } }],
+    ]);
+    expect(collectLogPayloads(vi.mocked(console.log))).toEqual([
+      "Automatic updates are on: bb checks every hour and restarts into a new version once no thread has run for 15 minutes.",
+      "Automatic updates are off.",
+      "Automatic updates are on: bb checks every hour and restarts into a new version once no thread has run for 15 minutes.",
     ]);
   });
 
@@ -651,7 +724,10 @@ describe("bb updates app command output", () => {
     });
     const waiting = appUpdateStatus({
       runningThreadCount: 1,
-      scheduled: { requestedAt: "2026-10-23T00:00:00.000Z" },
+      scheduled: {
+        requestedAt: "2026-10-23T00:00:00.000Z",
+        requiredIdleMs: 5_000,
+      },
     });
     const statuses = [
       appUpdateStatus(),
@@ -663,7 +739,10 @@ describe("bb updates app command output", () => {
           step: "Downloading bb-app 0.0.33",
           targetVersion: "0.0.33",
         },
-        scheduled: { requestedAt: "2026-10-23T00:00:00.000Z" },
+        scheduled: {
+          requestedAt: "2026-10-23T00:00:00.000Z",
+          requiredIdleMs: 5_000,
+        },
       }),
       waiting,
     ];
@@ -685,7 +764,7 @@ describe("bb updates app command output", () => {
       "Updating bb to 0.0.33",
       "Downloading bb-app 0.0.33…",
       "bb will update to 0.0.33 when all threads are idle (1 running).",
-      "Run bb updates app apply --yes to update now, or bb updates app cancel to keep the current version.",
+      "Run bb updates app apply --yes to update now, or bb updates app cancel to skip this version.",
     ]);
   });
 

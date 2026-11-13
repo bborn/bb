@@ -32,7 +32,7 @@ import type {
   SystemInstallCliSkillsRequest,
   SystemInstallCliSkillsResponse,
   SystemProviderStatesResponse,
-  SystemProvidersQuery,
+  SystemProviderStatesQuery,
   SystemUsageLimitsQuery,
   SystemVersionQuery,
   SystemVersionResponse,
@@ -107,6 +107,9 @@ export type SystemSetAiServiceSelectionArgs = SetAiServiceSelectionRequest;
 export type SystemTestAiServiceArgs = TestAiServiceRequest;
 export type SystemTestAiServiceResult = TestAiServiceResponse;
 export type SystemRecordTelemetryEventArgs = RecordTelemetryEventRequest;
+export interface SystemRecordTelemetryEventOptions {
+  keepalive: boolean;
+}
 export interface SystemRecordTelemetryEventResult {
   ok: true;
 }
@@ -130,7 +133,7 @@ export type SystemUpdateGeneralSettingsResult = AppSettings & {
 };
 export type SystemUpdateKeyboardSettingsResult = AppKeybindingOverrides;
 export type SystemUsageLimitsResult = ProviderUsageResponse;
-export interface SystemProviderStatesArgs extends SystemProvidersQuery {
+export interface SystemProviderStatesArgs extends SystemProviderStatesQuery {
   signal?: AbortSignal;
 }
 export type SystemProviderStatesResult = SystemProviderStatesResponse;
@@ -186,6 +189,7 @@ export interface SystemArea {
   ): Promise<SystemInstallCliSkillsResult>;
   experimental_recordTelemetryEvent(
     args: SystemRecordTelemetryEventArgs,
+    options?: SystemRecordTelemetryEventOptions,
   ): Promise<SystemRecordTelemetryEventResult>;
   reloadConfig(): Promise<SystemReloadConfigResult>;
   setAiServiceSelection(
@@ -223,6 +227,9 @@ export interface SystemArea {
   ): Promise<SystemAppUpdateStatusResult>;
   experimental_scheduleAppUpdate(): Promise<SystemAppUpdateStatusResult>;
   experimental_cancelScheduledAppUpdate(): Promise<SystemAppUpdateStatusResult>;
+  experimental_setAppUpdateAuto(args: {
+    enabled: boolean;
+  }): Promise<SystemAppUpdateStatusResult>;
   experimental_cliCommand(
     args?: SystemCliCommandArgs,
   ): Promise<SystemCliCommandStatusResult>;
@@ -355,9 +362,14 @@ export function createSystemArea(args: CreateSdkAreaArgs): SystemArea {
         transport.api.v1.system["cli-skills"].install.$post({ json: input }),
       );
     },
-    async experimental_recordTelemetryEvent(input) {
+    async experimental_recordTelemetryEvent(input, options) {
       return transport.readJson(
-        transport.api.v1.system.telemetry.events.$post({ json: input }),
+        transport.api.v1.system.telemetry.events.$post(
+          { json: input },
+          ...(options === undefined
+            ? []
+            : [{ init: { keepalive: options.keepalive } }]),
+        ),
       );
     },
     async reloadConfig() {
@@ -412,6 +424,7 @@ export function createSystemArea(args: CreateSdkAreaArgs): SystemArea {
             query: {
               environmentId: input.environmentId,
               hostId: input.hostId,
+              providerId: input.providerId,
             },
           },
           ...signalRequestArgs(input.signal),
@@ -473,6 +486,11 @@ export function createSystemArea(args: CreateSdkAreaArgs): SystemArea {
     async experimental_cancelScheduledAppUpdate() {
       return transport.readJson(
         transport.api.v1.system["app-update"].schedule.cancel.$post({}),
+      );
+    },
+    async experimental_setAppUpdateAuto(input) {
+      return transport.readJson(
+        transport.api.v1.system["app-update"].auto.$post({ json: input }),
       );
     },
     async experimental_cliCommand(input) {

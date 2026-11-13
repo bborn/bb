@@ -1,22 +1,18 @@
 import { z } from "zod";
 
 export const experimentKeys = [
-  "applicationLinks",
+  "agentCpuPriority",
   "compactExpiredCache",
   "dismissReadNotifications",
-  "narrowPluginCss",
   "serverMove",
   "performanceDiagnostics",
   "pluginUpdates",
   "resumeThreadsAfterRestart",
-  "sidebarMultiSelect",
   "skipFocusedThreadNotifications",
   "threadContextCard",
   "threadRowMetadata",
-  "timelinePush",
-  "unreadDividerAtAnswer",
   "updateWhenIdle",
-  "websocketCompression",
+  "walCheckpointWorker",
 ] as const;
 export const experimentKeySchema = z.enum(experimentKeys);
 export type ExperimentKey = z.infer<typeof experimentKeySchema>;
@@ -31,39 +27,31 @@ export const experimentUpdatesSchema = z.partialRecord(
 export type ExperimentUpdates = z.infer<typeof experimentUpdatesSchema>;
 
 export const defaultExperiments: Experiments = {
-  applicationLinks: false,
+  agentCpuPriority: false,
   compactExpiredCache: false,
   dismissReadNotifications: false,
-  narrowPluginCss: false,
   serverMove: false,
   performanceDiagnostics: false,
   pluginUpdates: false,
   resumeThreadsAfterRestart: false,
-  sidebarMultiSelect: false,
   skipFocusedThreadNotifications: false,
   threadContextCard: false,
   threadRowMetadata: false,
-  timelinePush: false,
-  unreadDividerAtAnswer: false,
   updateWhenIdle: false,
-  websocketCompression: false,
+  walCheckpointWorker: false,
 };
 
 export const earlyAdopterExperiments: Experiments = {
-  applicationLinks: true,
+  agentCpuPriority: false,
   compactExpiredCache: true,
-  dismissReadNotifications: false,
-  narrowPluginCss: false,
+  dismissReadNotifications: true,
   serverMove: false,
   performanceDiagnostics: false,
   pluginUpdates: true,
   resumeThreadsAfterRestart: false,
-  sidebarMultiSelect: true,
   skipFocusedThreadNotifications: true,
   threadContextCard: false,
   threadRowMetadata: true,
-  timelinePush: true,
-  unreadDividerAtAnswer: true,
   updateWhenIdle: true,
-  websocketCompression: true,
+  walCheckpointWorker: false,
 };

@@ -932,8 +932,6 @@ describe("Account Pool plugin", () => {
     expect(firstCodex).toMatchObject({
       provider: "codex",
       status: "exhausted",
-      fiveHourUtilization: null,
-      sevenDayUtilization: null,
       familyWeekly: { other: null },
       limitWindows: [
         {
@@ -1864,6 +1862,14 @@ describe("Account Pool plugin", () => {
           "Claude Code limits Opus to a 200k context window behind a custom base URL; the hub forwards to Anthropic's API",
       },
       {
+        name: "BB_CLAUDE_MODELS_URL",
+        value: {
+          serverPath: "/api/v1/plugins/account-pool/http/claude/v1/models",
+        },
+        reason:
+          "Claude Code lists only its cached models behind a custom base URL; bb lists the pooled accounts' models from the hub",
+      },
+      {
         name: "BB_ACCOUNT_POOL_PARENT_URL",
         value: { serverPath: "/api/v1/plugins/account-pool/http" },
         reason: "Account Pooler hub for nested bb servers on this machine",
@@ -1908,6 +1914,56 @@ describe("Account Pool plugin", () => {
     ]);
     expect(off.exitCode).toBe(0);
     expect(await resolveToken(fixture.host)).toBe(fixture.key);
+  });
+
+  it("lists Claude models through the hub with a pooled account's credentials", async () => {
+    const seen: Array<{ url: string | undefined; authorization: string | undefined }> = [];
+    const upstream = await startUpstream(async (request, response) => {
+      await readRequestBody(request);
+      seen.push({
+        url: request.url,
+        authorization: request.headers.authorization,
+      });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"data":[],"has_more":false,"last_id":null}');
+    });
+    cleanups.push(upstream.close);
+    const fixture = await createFixture({
+      upstreamUrl: upstream.url,
+      source: "oauth",
+      options: { claudeLogin: async () => claudeCredentials() },
+    });
+    const entries = await fixture.host.harness.behavior.resolveProviderEnv(
+      "claude-code",
+      { threadId: null, projectId: null, hostId: "host-one" },
+    );
+    const modelsUrl = entries.find(
+      (entry) => entry.name === "BB_CLAUDE_MODELS_URL",
+    )?.value;
+    expect(modelsUrl).toEqual({
+      serverPath: "/api/v1/plugins/account-pool/http/claude/v1/models",
+    });
+
+    const response = await fixture.host.harness.behavior.fetchHttp(
+      "GET",
+      "/claude/v1/models?limit=1000",
+      {
+        headers: {
+          authorization: `Bearer ${fixture.key}`,
+          "anthropic-version": "2023-06-01",
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      data: [],
+      has_more: false,
+      last_id: null,
+    });
+    expect(seen).toEqual([
+      { url: "/v1/models?limit=1000", authorization: "Bearer oauth-access" },
+    ]);
   });
 
   it("routes thread-less Codex model listing through the hub without recording a thread route", async () => {
@@ -2347,10 +2403,22 @@ describe("Account Pool plugin", () => {
       .array(accountSummarySchema)
       .parse(await fixture.host.harness.behavior.callRpc("account.list", null));
     expect(accounts[0]).toMatchObject({
-      fiveHourUtilization: 0.25,
-      sevenDayUtilization: 0.5,
-      fiveHourStatus: "allowed",
-      sevenDayStatus: "allowed",
+      limitWindows: [
+        {
+          slot: "primary",
+          windowMinutes: 300,
+          utilization: 0.25,
+          status: "allowed",
+          source: "header",
+        },
+        {
+          slot: "secondary",
+          windowMinutes: 10_080,
+          utilization: 0.5,
+          status: "allowed",
+          source: "header",
+        },
+      ],
       representativeClaim: "claim-a",
       familyWeekly: {
         fable: {
@@ -3917,6 +3985,15 @@ describe("Account Pool plugin", () => {
       return fixture;
     }
 
+    const upstreamKey = (init: RequestInit | undefined) => {
+      const headers = new Headers(init?.headers);
+      return (
+        headers.get("x-api-key") ??
+        headers.get("authorization")?.slice(7) ??
+        ""
+      );
+    };
+
     it.each(["claude", "codex"] as const)(
       "keeps %s sessions and the pool cursor on the third account after two failures",
       async (provider) => {
@@ -3925,16 +4002,14 @@ describe("Account Pool plugin", () => {
         const fixture = await affinityFixture(
           provider,
           async (_input, init) => {
-            const headers = new Headers(init?.headers);
-            const key =
-              headers.get("x-api-key") ??
-              headers.get("authorization")?.slice(7) ??
-              "";
+            const key = upstreamKey(init);
             attempts.push(key);
-            return Response.json(
-              {},
-              { status: outage && key !== "sk-third" ? 503 : 200 },
-            );
+            return outage && key !== "sk-third"
+              ? Response.json(
+                  {},
+                  { status: 503, headers: { "retry-after": "0" } },
+                )
+              : Response.json({});
           },
         );
         if (provider === "claude") await addApiAccount(fixture, "sk-third");
@@ -3966,6 +4041,8 @@ describe("Account Pool plugin", () => {
         expect(attempts).toEqual([
           "sk-first",
           "sk-first",
+          "sk-first",
+          "sk-first",
           "sk-second",
           "sk-third",
           "sk-third",
@@ -3975,6 +4052,81 @@ describe("Account Pool plugin", () => {
         ]);
       },
     );
+
+    it.each(["claude", "codex"] as const)(
+      "retries a pinned %s session on its account after a transport error",
+      async (provider) => {
+        let failures = 0;
+        const attempts: Array<{ key: string; at: number }> = [];
+        const fixture = await affinityFixture(
+          provider,
+          async (_input, init) => {
+            const key = upstreamKey(init);
+            attempts.push({ key, at: Date.now() });
+            if (key === "sk-first" && failures > 0) {
+              failures--;
+              throw new TypeError("fetch failed");
+            }
+            return Response.json({});
+          },
+        );
+        const send = async (id: string) => {
+          const response = await fixture.host.harness.behavior.fetchHttp(
+            "POST",
+            provider === "claude" ? "/v1/messages" : "/v1/responses",
+            {
+              headers: { ...authHeaders(fixture.key), "session-id": id },
+              body: provider === "claude" ? claudeBody(id) : "{}",
+            },
+          );
+          expect(response.status).toBe(200);
+          await response.text();
+        };
+        await send("warm");
+        failures = 1;
+        await send("warm");
+        expect(attempts.map(({ key }) => key)).toEqual([
+          "sk-first",
+          "sk-first",
+          "sk-first",
+        ]);
+        expect(
+          (attempts[2]?.at ?? 0) - (attempts[1]?.at ?? 0),
+        ).toBeGreaterThanOrEqual(990);
+      },
+    );
+
+    it("fails a pinned session over at once when a transient failure asks for a long wait", async () => {
+      let overloaded = false;
+      const attempts: string[] = [];
+      const fixture = await affinityFixture("claude", async (_input, init) => {
+        const key = upstreamKey(init);
+        attempts.push(key);
+        return overloaded && key === "sk-first"
+          ? Response.json({}, { status: 529, headers: { "retry-after": "60" } })
+          : Response.json({});
+      });
+      const send = async (id: string) => {
+        const response = await fixture.host.harness.behavior.fetchHttp(
+          "POST",
+          "/v1/messages",
+          { headers: authHeaders(fixture.key), body: claudeBody(id) },
+        );
+        expect(response.status).toBe(200);
+        await response.text();
+      };
+      await send("warm");
+      overloaded = true;
+      await send("warm");
+      overloaded = false;
+      await send("warm");
+      expect(attempts).toEqual([
+        "sk-first",
+        "sk-first",
+        "sk-second",
+        "sk-second",
+      ]);
+    });
 
     it.each(["claude", "codex"] as const)(
       "lets new %s conversations bypass long holds while preserving established pins",
@@ -4740,7 +4892,7 @@ describe("Account Pool plugin", () => {
           const route =
             provider === "claude" ? "/v1/messages" : "/v1/responses";
           const seen: Array<{ key: string | null; body: string }> = [];
-          let rejectNext = false;
+          let rejections = 0;
           const fixture = await affinityFixture(
             provider,
             async (_input, init) => {
@@ -4757,9 +4909,12 @@ describe("Account Pool plugin", () => {
                 ),
               });
               if (seen.length === 1) return openStream();
-              if (rejectNext) {
-                rejectNext = false;
-                return Response.json({}, { status: 503 });
+              if (rejections > 0) {
+                rejections--;
+                return Response.json(
+                  {},
+                  { status: 503, headers: { "retry-after": "0" } },
+                );
               }
               return Response.json({});
             },
@@ -4780,7 +4935,7 @@ describe("Account Pool plugin", () => {
             expect(seen[1]?.body).toBe(
               forkRequest(wire, "child-session", "parent-session").body,
             );
-            rejectNext = true;
+            rejections = 3;
             const failover = await send("child-session", "parent-session");
             expect(failover.status).toBe(200);
             await failover.text();
@@ -4789,6 +4944,8 @@ describe("Account Pool plugin", () => {
             const repeatedChild = await send("child-session", "parent-session");
             await repeatedChild.text();
             expect(seen.map(({ key }) => key)).toEqual([
+              "sk-first",
+              "sk-first",
               "sk-first",
               "sk-first",
               "sk-first",
@@ -5178,9 +5335,11 @@ describe("Account Pool plugin", () => {
           const afterCompletion = await send("claude-opus-4-1");
           await afterCompletion.text();
           expect(attempts).toEqual(
-            reason === "auth error" || reason === "network error"
+            reason === "auth error"
               ? ["sk-first", "sk-first", "sk-second", "sk-second"]
-              : [
+              : reason === "network error"
+                ? ["sk-first", "sk-first", "sk-first", "sk-first"]
+                : [
                   "sk-first",
                   "sk-second",
                   reason === "family quota" ? "sk-first" : "sk-second",
@@ -6299,7 +6458,9 @@ describe("sequential pool recovery", () => {
       options: {
         fetch: async (_input, init) => {
           attempts.push(new Headers(init?.headers).get("x-api-key"));
-          return Response.json({}, { status: outage ? 503 : 200 });
+          return outage
+            ? Response.json({}, { status: 503, headers: { "retry-after": "0" } })
+            : Response.json({});
         },
       },
     });
@@ -6316,7 +6477,14 @@ describe("sequential pool recovery", () => {
     await failed.text();
     outage = false;
     await (await send()).text();
-    expect(attempts).toEqual(["sk-first", "sk-first", "sk-second", "sk-first"]);
+    expect(attempts).toEqual([
+      "sk-first",
+      "sk-first",
+      "sk-first",
+      "sk-first",
+      "sk-second",
+      "sk-first",
+    ]);
   });
 
   it("sends new conversations to accounts past the switch threshold behind those below it until the provider refuses them", async () => {
@@ -7420,12 +7588,20 @@ it("drains a streamed response before disposing the owned transport", async () =
   }
 });
 
-it("publishes pooled usage without a display plugin and does not invent unobserved utilization", async () => {
+it("publishes pooled subscription usage without a display plugin and does not invent unobserved utilization", async () => {
   const upstream = await startUpstream((_request, response) => {
     response.end();
   });
   cleanups.push(upstream.close);
-  const fixture = await createFixture({ upstreamUrl: upstream.url });
+  const fixture = await createFixture({
+    upstreamUrl: upstream.url,
+    source: "oauth",
+    options: {
+      usageUrl: `${upstream.url}/usage`,
+      claudeLogin: async () => claudeCredentials(),
+    },
+  });
+  const apiKeyAccount = await addApiAccount(fixture, "sk-pay-as-you-go");
   const inventory = usageResourceListSchema.parse(
     await fixture.host.harness.behavior.callRpc(usageListMethod, {}),
   );
@@ -7450,6 +7626,12 @@ it("publishes pooled usage without a display plugin and does not invent unobserv
       message: "Usage has not been observed for this account.",
     },
   });
+  await expect(
+    fixture.host.harness.behavior.callRpc(usageFetchMethod, {
+      resourceId: apiKeyAccount.id,
+      refresh: false,
+    }),
+  ).rejects.toThrow("no longer exists");
   expect(
     fixture.host.harness.registrations.experimental_publishedRpcMethods.map(
       (entry) => entry.method,
@@ -7598,6 +7780,7 @@ describe("Account Pool nested proxy", () => {
       "ANTHROPIC_BASE_URL",
       "ANTHROPIC_AUTH_TOKEN",
       "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+      "BB_CLAUDE_MODELS_URL",
     ],
     codex: ["CODEX_OPENAI_BASE_URL", "CODEX_POOL_AUTH_TOKEN"],
   } as const;
@@ -7674,6 +7857,7 @@ describe("Account Pool nested proxy", () => {
       "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
       "ENABLE_TOOL_SEARCH",
       "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL",
+      "BB_CLAUDE_MODELS_URL",
       "ENABLE_PROMPT_CACHING_1H",
       "BB_ACCOUNT_POOL_PARENT_URL",
       "BB_ACCOUNT_POOL_PARENT_TOKEN",

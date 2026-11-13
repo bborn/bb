@@ -11,6 +11,7 @@ import {
   getEnvironment,
   getExperiments,
   hasLiveQueuedRetry,
+  isAppUpdateSendHoldSet,
   type EnvironmentRow,
   getThread,
   isThreadQueueAutoSendPaused,
@@ -77,6 +78,7 @@ import {
   scheduleThreadProvisioningAdvance,
 } from "./thread-provisioning.js";
 import {
+  FORK_HISTORY_COPY_MARK,
   threadForkDescriptorSchema,
   threadProvisionEnvironmentIntentSchema,
 } from "./thread-startup-store.js";
@@ -109,6 +111,7 @@ import { markTurnTraceSpan } from "../system/turn-trace.js";
 export const pendingThreadStartContextSchema = z.object({
   environmentIntent: threadProvisionEnvironmentIntentSchema,
   fork: threadForkDescriptorSchema.nullable(),
+  historyCopy: z.literal(FORK_HISTORY_COPY_MARK).optional(),
   /** Provider-facing input when it differs from the persisted start seed. */
   providerInput: z.array(promptInputSchema).optional(),
   startedOnBehalfOf: startedOnBehalfOfSchema.nullable(),
@@ -375,6 +378,16 @@ async function runDispatchAttempt(
   // recover from, rather than the 409 that used to make a stop a dead end for
   // everything the user lined up behind it.
   ensureThreadIsWritable(thread, true);
+  if (
+    thread.status === "pending" &&
+    readPendingThreadStartContext(deps, thread.id)?.historyCopy !== undefined
+  ) {
+    throw new ApiError(
+      409,
+      "fork_history_copying",
+      "This fork is still copying its history; send the message again once it finishes",
+    );
+  }
   assertThreadHostAcceptsWork(deps.db, thread);
   if (
     payload.mode === "queue-if-active" &&
@@ -461,9 +474,7 @@ async function runDispatchAttempt(
     deliveryMode: run.deliveryMode,
   };
 
-  const retriesGoFirst = getExperiments(
-    deps.db,
-  ).resumeThreadsAfterRestart;
+  const retriesGoFirst = getExperiments(deps.db).resumeThreadsAfterRestart;
   const waitOn = (
     waitingOn: QueuedMessageWaitingOn,
     sendAt: number | null,
@@ -503,6 +514,11 @@ async function runDispatchAttempt(
     const sendAt = payload.sendAt ?? null;
     if (!sendNow && sendAt !== null && sendAt > Date.now()) {
       continued.outcome = waitOn({ kind: "time" }, sendAt);
+      return;
+    }
+
+    if (isAppUpdateSendHoldSet(deps.db)) {
+      continued.outcome = waitOn({ kind: "app-update" }, null);
       return;
     }
 
@@ -724,13 +740,7 @@ async function runDispatchAttempt(
       // for a thread that is gone. Reporting a dispatch here would tell the
       // caller their message went when it went nowhere.
       const current = getThread(deps.db, thread.id);
-      return reattemptDispatchForThreadChange(
-        deps,
-        args,
-        current,
-        run,
-        waitOn,
-      );
+      return reattemptDispatchForThreadChange(deps, args, current, run, waitOn);
     }
     await launchAdmittedThread(deps, admission);
     return { kind: "dispatched" };

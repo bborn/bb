@@ -38,6 +38,7 @@ import {
   type ComposerView,
   type ExperimentalTabRegistration,
   type ExperimentalAppOverlayRegistration,
+  type InternalDoNotUseSetupGuideSectionRegistration,
   type ExperimentalSidebarNavigationActions,
   type ExperimentalSidebarNavigationTarget,
   type ExperimentalSidebarNavigationIconProps,
@@ -106,8 +107,11 @@ import {
   type PluginSidebarThreadsState,
   type PluginSourceCodeRendererRegistration,
   type ExperimentalThreadContextSegmentRegistration,
+  type ExperimentalCollapsibleStackCardProps,
   type ExperimentalThreadInfoRowRegistration,
   type ExperimentalThreadInfoSectionRegistration,
+  type ExperimentalThreadHeaderRowRegistration,
+  type ExperimentalThreadHeaderTitleRegistration,
   type ExperimentalThreadContextCardRowRegistration,
   type ExperimentalThreadContextCardSectionRegistration,
   type ExperimentalThreadContextKind,
@@ -376,6 +380,9 @@ interface SlotEnv {
   sidebarDraftThreadIds: ReadonlySet<string>;
   experiments: ReadonlySet<string>;
   threadContextKind: ExperimentalThreadContextKind;
+  threadExtensionStates: Readonly<
+    Record<string, Readonly<Record<string, unknown>>>
+  >;
   sidebarRowStatuses: ReadonlyMap<string, PluginSidebarThreadRowStatus>;
   sidebarShortcuts: ReadonlyMap<string, PluginSidebarThreadShortcut>;
   sidebarSplitLayout: PluginSidebarSplitLayout | null;
@@ -1543,6 +1550,33 @@ function TestInfoSection({
   );
 }
 
+/** Stand-in for bb's collapsible stack card; always shows its body. */
+function TestCollapsibleStackCard({
+  label,
+  title,
+  icon,
+  isActive,
+  dismiss,
+  children,
+}: ExperimentalCollapsibleStackCardProps) {
+  return (
+    <section
+      aria-label={label}
+      data-testid="bb-collapsible-stack-card"
+      data-icon={icon}
+      data-active={isActive ? "true" : "false"}
+    >
+      <h3>{title}</h3>
+      {dismiss === undefined ? null : (
+        <button type="button" onClick={() => void dismiss.onDismiss()}>
+          {dismiss.label}
+        </button>
+      )}
+      {children}
+    </section>
+  );
+}
+
 /** Stand-in for the Info tab label and value row. */
 function TestDetailRow({ label, icon, children }: ExperimentalDetailRowProps) {
   return (
@@ -1712,6 +1746,13 @@ const testPluginSdkApp = {
   experimental_useThreadContextKind(): ExperimentalThreadContextKind {
     return useSlotEnv("experimental_useThreadContextKind").threadContextKind;
   },
+  experimental_useThreadExtensionState(threadId, kind): unknown {
+    return (
+      useSlotEnv("experimental_useThreadExtensionState").threadExtensionStates[
+        threadId
+      ]?.[kind] ?? null
+    );
+  },
   useBbContext(): BbContext {
     return useSlotEnv("useBbContext").bbContext;
   },
@@ -1853,6 +1894,7 @@ const testPluginSdkApp = {
   experimental_FilePreview: TestFilePreview,
   experimental_Diff: TestDiff,
   experimental_InfoSection: TestInfoSection,
+  experimental_CollapsibleStackCard: TestCollapsibleStackCard,
   experimental_DetailRow: TestDetailRow,
   experimental_ThreadContextCardRow: TestThreadContextCardRow,
   experimental_PanelTabIcon: TestPanelTabIcon,
@@ -2087,6 +2129,7 @@ export interface CapturedPluginApp {
   homepageSections: PluginHomepageSectionRegistration[];
   settingsSections: PluginSettingsSectionRegistration[];
   appOverlays: ExperimentalAppOverlayRegistration[];
+  setupGuideSections: InternalDoNotUseSetupGuideSectionRegistration[];
   navPanels: import("../internal/plugin-app-registration-collector.js").LegacyNavPanelRegistration[];
   tabs: ExperimentalTabRegistration[];
   threadPanelActions: import("../internal/plugin-app-registration-collector.js").LegacyThreadPanelActionRegistration[];
@@ -2102,6 +2145,8 @@ export interface CapturedPluginApp {
   threadInfoRows: ExperimentalThreadInfoRowRegistration[];
   threadRowMetadata: ExperimentalThreadRowMetadataRegistration<unknown>[];
   threadInfoSections: ExperimentalThreadInfoSectionRegistration[];
+  threadHeaderRows: ExperimentalThreadHeaderRowRegistration[];
+  threadHeaderTitles: ExperimentalThreadHeaderTitleRegistration[];
   threadContextCardRows: ExperimentalThreadContextCardRowRegistration[];
   threadContextCardSections: ExperimentalThreadContextCardSectionRegistration[];
   threadActions: PluginThreadActionRegistration<unknown>[];
@@ -2386,6 +2431,14 @@ export interface RenderSlotOptions<
   /** What `experimental_useThreadContextKind()` reports. Omitted → `banner`. */
   threadContextKind?: ExperimentalThreadContextKind;
   /**
+   * What `experimental_useThreadExtensionState(threadId, kind)` reports,
+   * keyed by thread id and then by the kind's local name. Omitted → null for
+   * every thread and kind.
+   */
+  threadExtensionStates?: Readonly<
+    Record<string, Readonly<Record<string, unknown>>>
+  >;
+  /**
    * Row statuses `useSidebarThreadRowStatus()` reports, keyed by thread id.
    * Omitted → every thread reports null.
    */
@@ -2499,13 +2552,19 @@ export interface RenderSlotOptions<
 /** Host-originated inputs a slot test can drive deterministically. */
 export interface RenderedSlotBehaviorDrivers {
   /**
-   * Push a realtime event to `useRealtime(channel, …)` subscribers, wrapped
-   * in act. The payload is JSON-round-tripped like `bb.realtime.publish`.
+   * Invalidate the plugin's cached `useRpc` reads carrying any of `tags`, as a
+   * backend `bb.rpc.experimental_invalidate` does, wrapped in act. `null`
+   * invalidates every read, like `experimental_invalidateAll`. `pluginId`
+   * defaults to the rendered plugin.
    */
   experimental_invalidateRpc(
     tags: readonly string[] | null,
     pluginId?: string,
   ): Promise<void>;
+  /**
+   * Push a realtime event to `useRealtime(channel, …)` subscribers, wrapped
+   * in act. The payload is JSON-round-tripped like `bb.realtime.publish`.
+   */
   emitRealtime(channel: string, payload: unknown): Promise<void>;
   /** Drive the lifecycle of the same connection used by realtime events. */
   setRealtimeConnectionState(
@@ -3389,6 +3448,7 @@ export function renderSlot<
     sidebarDraftThreadIds,
     experiments: new Set(options.experiments ?? []),
     threadContextKind: options.threadContextKind ?? "banner",
+    threadExtensionStates: options.threadExtensionStates ?? {},
     sidebarRowStatuses,
     sidebarShortcuts,
     sidebarSplitLayout: options.sidebarSplitLayout ?? null,

@@ -21,13 +21,17 @@ import type {
 } from "@bb/server-contract";
 import { ApiError } from "../../errors.js";
 import type { ServerLogger, ServerRuntimeConfig } from "../../types.js";
+import type { AppUpdateSendHold } from "./app-update-send-hold.js";
 import type { AppVersionService } from "./app-version.js";
 import type { LauncherChannel } from "./launcher-channel.js";
 
 const SOURCE_CHECK_TTL_MS = 60 * 60 * 1000;
 const FIRST_STATUS_WAIT_MS = 1_000;
 
-export type AppUpdateServiceStatus = Omit<SystemAppUpdateStatus, "scheduled">;
+export type AppUpdateServiceStatus = Omit<
+  SystemAppUpdateStatus,
+  "autoUpdate" | "availableSkipped" | "scheduled"
+>;
 
 export type RunningThreadsPolicy =
   | { kind: "refuse" }
@@ -43,11 +47,17 @@ export interface AppUpdateService {
   getStatus(args: { forceRefresh: boolean }): Promise<AppUpdateServiceStatus>;
 }
 
-export function runningThreadsError(count: number): ApiError {
+export function runningThreadsError(
+  count: number,
+  threadsResume: boolean,
+): ApiError {
+  const running = `${String(count)} thread${count === 1 ? " is" : "s are"} running.`;
   return new ApiError(
     409,
     "threads_running",
-    `${String(count)} thread${count === 1 ? " is" : "s are"} running. Updating restarts bb and interrupts ${count === 1 ? "it" : "them"}.`,
+    threadsResume
+      ? `${running} Updating restarts bb, and ${count === 1 ? "it resumes" : "they resume"} after the update.`
+      : `${running} Updating restarts bb and interrupts ${count === 1 ? "it" : "them"}.`,
     { details: { runningThreadCount: count } },
   );
 }
@@ -67,7 +77,9 @@ interface CreateAppUpdateServiceArgs {
   mode: AppUpdateMode | null;
   notifyChanged: () => void;
   now?: () => number;
+  sendHold: AppUpdateSendHold;
   sourceCheckTtlMs?: number;
+  threadsResumeAfterRestart: () => boolean;
 }
 
 function toPublicRevision(revision: AppRevision): SystemAppUpdateRevision {
@@ -155,10 +167,19 @@ export function createAppUpdateService(
   let launcherConnected = args.launcher !== null;
   let runningThreadsPolicy: RunningThreadsPolicy = { kind: "refuse" };
   let decidedReadyAt: string | null = null;
+  let holdingSends = false;
+
+  const releaseSends = (): void => {
+    if (!holdingSends) return;
+    holdingSends = false;
+    args.sendHold.release();
+  };
 
   const decideRestart = (launcher: LauncherChannel, readyAt: string): void => {
     if (decidedReadyAt === readyAt) return;
     decidedReadyAt = readyAt;
+    holdingSends = true;
+    args.sendHold.hold();
     const runningThreadCount = args.countRunningThreads();
     const policy = runningThreadsPolicy;
     const request: AppUpdateLauncherRequest =
@@ -172,11 +193,13 @@ export function createAppUpdateService(
               message: threadsStartedMessage(runningThreadCount),
               type: "cancel",
             };
+    if (request.type !== "restart") releaseSends();
     void launcher.request(request).catch((error: unknown) => {
       args.logger.warn(
         { error: errorMessage(error), request: request.type },
         "Launcher did not accept the restart decision",
       );
+      releaseSends();
     });
   };
 
@@ -187,6 +210,8 @@ export function createAppUpdateService(
       resolveFirstStatus = null;
       if (status.activity.phase === "ready" && args.launcher !== null) {
         decideRestart(args.launcher, status.activity.startedAt);
+      } else if (status.activity.phase === "idle") {
+        releaseSends();
       }
       args.notifyChanged();
     }) ?? (() => undefined);
@@ -414,7 +439,10 @@ export function createAppUpdateService(
         runningThreads.kind === "refuse" &&
         status.runningThreadCount > 0
       ) {
-        throw runningThreadsError(status.runningThreadCount);
+        throw runningThreadsError(
+          status.runningThreadCount,
+          args.threadsResumeAfterRestart(),
+        );
       }
       const target: AppUpdateTarget | null =
         status.support.kind === "supported" && status.support.mode === "npm"

@@ -34,6 +34,8 @@ function appUpdate(
     blocked: null,
     current: { commit: null, version: current },
     lastResult: null,
+    autoUpdate: false,
+    availableSkipped: false,
     runningThreadCount: 0,
     scheduled: null,
     support: { kind: "supported", mode: "npm" },
@@ -219,7 +221,7 @@ Older lede.
   });
 
   it("is null when neither changelog has the release", () => {
-    expect(findReleaseEntry("0.49.0", FETCHED, CHANGELOG_ENTRIES)).toBeNull();
+    expect(findReleaseEntry("99.0.0", FETCHED, CHANGELOG_ENTRIES)).toBeNull();
   });
 
   it("covers a patch release with the newest earlier entry in its minor line", () => {

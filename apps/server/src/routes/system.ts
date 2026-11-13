@@ -1,4 +1,4 @@
-import { reportedProviderId } from "../services/system/provider-telemetry.js";
+import { withReportedProviderId } from "../services/system/provider-telemetry.js";
 import { rememberPluginRecommendation } from "../services/plugins/plugin-use-telemetry.js";
 import { createMobileAppReleaseService } from "../services/install/mobile-app-releases.js";
 import {
@@ -347,7 +347,12 @@ export function registerSystemRoutes(
     return context.json(compatibleGeneralSettings());
   });
 
-  post(routes.recordTelemetryEvent, (context, payload) => {
+  get(routes.setupGuide, async (context) => {
+    const { guide } = await deps.setupGuideExperiment.resolve();
+    return context.json({ variant: guide.variant });
+  });
+
+  post(routes.recordTelemetryEvent, async (context, payload) => {
     if (
       payload.name === "recommendation" &&
       payload.properties.action === "selected"
@@ -358,18 +363,12 @@ export function registerSystemRoutes(
         payload.properties.recommendation_id,
       );
     }
+    if (payload.name === "onboarding_exposed") {
+      await deps.setupGuideExperiment.recordExposure(payload.properties.entry);
+      return context.json({ ok: true });
+    }
     deps.telemetry.capture(
-      payload.name === "onboarding_operation" &&
-        payload.properties.step === "agent" &&
-        payload.properties.resource_id !== undefined
-        ? {
-            ...payload,
-            properties: {
-              ...payload.properties,
-              resource_id: reportedProviderId(payload.properties.resource_id),
-            },
-          }
-        : payload,
+      await deps.setupGuideExperiment.annotate(withReportedProviderId(payload)),
     );
     return context.json({ ok: true });
   });
@@ -756,6 +755,12 @@ export function registerSystemRoutes(
     assertAppUpdateAllowed(context);
     assertUpdateWhenIdleEnabled(deps.db);
     return context.json(await deps.appUpdate.cancelScheduled());
+  });
+
+  post(routes.setAppUpdateAuto, async (context, body) => {
+    assertAppUpdateAllowed(context);
+    assertUpdateWhenIdleEnabled(deps.db);
+    return context.json(await deps.appUpdate.setAutoUpdate(body.enabled));
   });
 
   post(routes.acknowledgeAppUpdate, async (context, body) => {

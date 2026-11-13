@@ -1,4 +1,5 @@
 import {
+  isAppUpdateSendHoldSet,
   claimNextQueuedThreadMessageGroup,
   claimQueuedThreadMessageGroup,
   createQueuedThreadMessageInTransaction,
@@ -146,6 +147,8 @@ export function createAutomaticQueuedMessageGroupEligibility(
             deps.hub.hasDaemonForHost(host.id)
           );
         }
+        case "app-update":
+          return !isAppUpdateSendHoldSet(deps.db);
         case "provisioning":
         case "interaction":
         case "superseded":
@@ -560,6 +563,8 @@ function describeCoreWait(waitingOn: QueuedMessageWaitingOn | null): string {
       return "the current turn is still starting";
     case "stopping":
       return "the thread is still stopping";
+    case "app-update":
+      return "bb is restarting to update";
     case "plugin":
       return `it is waiting on the "${waitingOn.pluginId}" plugin`;
     case "superseded":
@@ -575,7 +580,6 @@ export async function sendQueuedMessage(
   deps: LoggedPendingInteractionWorkSessionDeps,
   args: SendQueuedMessageArgs,
 ): Promise<ThreadQueuedMessage> {
-  const sendNow = args.claimPolicy.kind === "explicit-send";
   const queuedMessages = claimQueuedThreadMessageForSend(deps, args);
   if (queuedMessages.length === 0) {
     const existing = getQueuedThreadMessage(deps.db, args.queuedMessageId);
@@ -583,6 +587,24 @@ export async function sendQueuedMessage(
       throw new ApiError(404, "invalid_request", "Queued message not found");
     return toThreadQueuedMessage(existing);
   }
+  try {
+    return await sendClaimedQueuedMessageGroup(deps, args, queuedMessages);
+  } finally {
+    if (getThread(deps.db, args.threadId)?.status === "idle") {
+      requestQueuedMessageDispatch(deps, {
+        kind: "thread-ready",
+        threadId: args.threadId,
+      });
+    }
+  }
+}
+
+async function sendClaimedQueuedMessageGroup(
+  deps: LoggedPendingInteractionWorkSessionDeps,
+  args: SendQueuedMessageArgs,
+  queuedMessages: ClaimedQueuedMessage[],
+): Promise<ThreadQueuedMessage> {
+  const sendNow = args.claimPolicy.kind === "explicit-send";
   const thread = getThread(deps.db, args.threadId);
   if (
     thread &&

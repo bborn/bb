@@ -18,6 +18,7 @@ import {
 import { StoryCard, StoryRow } from "../../../.ladle/story-card";
 import { ReleaseNotesPanel } from "./ReleaseNotesPanel";
 import {
+  AutoAppUpdateSetting,
   BbAppUpdateRows,
   BbUpdatesCard,
   MachineUpdateRow,
@@ -78,6 +79,8 @@ const IN_APP_UPDATE: SystemAppUpdateStatus = {
   blocked: null,
   current: { commit: null, version: "0.38.0" },
   lastResult: null,
+  autoUpdate: false,
+  availableSkipped: false,
   runningThreadCount: 0,
   scheduled: null,
   support: { kind: "supported", mode: "npm" },
@@ -453,7 +456,7 @@ export function RowVariations() {
 
         <StoryRow
           label="In-app update while threads run"
-          hint="With the updateWhenIdle experiment on, Update when idle waits for running threads; Update now in its menu asks before interrupting them."
+          hint="Update asks before interrupting running threads. With automatic updates on, the update waits for them instead."
         >
           <div className="w-full">
             <BbUpdatesCard>
@@ -463,7 +466,6 @@ export function RowVariations() {
                 desktopInfo={null}
                 isDesktop={false}
                 onApplyAppUpdate={noop}
-                onScheduleAppUpdate={noop}
                 onRelaunchDesktop={null}
                 onRetryDesktop={null}
                 onShowAppUpdateResult={noop}
@@ -474,7 +476,7 @@ export function RowVariations() {
 
         <StoryRow
           label="In-app update waiting for threads"
-          hint="The update was scheduled for when threads finish; the server starts it once none are running."
+          hint="Automatic updates found this version; the server starts it once no thread has run for 15 minutes. Skip this version keeps it from installing until a newer one appears."
         >
           <div className="w-full">
             <BbUpdatesCard>
@@ -483,7 +485,76 @@ export function RowVariations() {
                 appUpdate={{
                   ...IN_APP_UPDATE,
                   runningThreadCount: 2,
-                  scheduled: { requestedAt: "2026-10-23T00:00:00.000Z" },
+                  scheduled: {
+                    requestedAt: "2026-10-23T00:00:00.000Z",
+                    requiredIdleMs: 15 * 60_000,
+                  },
+                }}
+                desktopInfo={null}
+                isDesktop={false}
+                onApplyAppUpdate={noop}
+                onCancelScheduledAppUpdate={noop}
+                onRelaunchDesktop={null}
+                onRetryDesktop={null}
+                onShowAppUpdateResult={noop}
+              />
+              <AutoAppUpdateSetting
+                label="Restart and update bb automatically"
+                checked
+                onCheckedChange={noop}
+              />
+            </BbUpdatesCard>
+          </div>
+        </StoryRow>
+
+        <StoryRow
+          label="In-app update waiting for idle time"
+          hint="Every thread has finished; the automatic update still waits until no thread has run for 15 minutes, so bb does not restart between turns."
+        >
+          <div className="w-full">
+            <BbUpdatesCard>
+              <BbAppUpdateRows
+                systemVersion={NPM_VERSION}
+                appUpdate={{
+                  ...IN_APP_UPDATE,
+                  runningThreadCount: 0,
+                  scheduled: {
+                    requestedAt: "2026-10-23T00:00:00.000Z",
+                    requiredIdleMs: 15 * 60_000,
+                  },
+                }}
+                desktopInfo={null}
+                isDesktop={false}
+                onApplyAppUpdate={noop}
+                onCancelScheduledAppUpdate={noop}
+                onRelaunchDesktop={null}
+                onRetryDesktop={null}
+                onShowAppUpdateResult={noop}
+              />
+              <AutoAppUpdateSetting
+                label="Restart and update bb automatically"
+                checked
+                onCheckedChange={noop}
+              />
+            </BbUpdatesCard>
+          </div>
+        </StoryRow>
+
+        <StoryRow
+          label="Requested update waiting for threads"
+          hint="bb updates app apply --when-idle asked for this update; the server starts it a few seconds after the running threads finish."
+        >
+          <div className="w-full">
+            <BbUpdatesCard>
+              <BbAppUpdateRows
+                systemVersion={NPM_VERSION}
+                appUpdate={{
+                  ...IN_APP_UPDATE,
+                  runningThreadCount: 2,
+                  scheduled: {
+                    requestedAt: "2026-10-23T00:00:00.000Z",
+                    requiredIdleMs: 5_000,
+                  },
                 }}
                 desktopInfo={null}
                 isDesktop={false}

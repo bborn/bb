@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { Environment, JsonValue } from "@bb/domain";
 import { createBbSdk } from "../src/core.js";
@@ -224,13 +224,8 @@ describe("@bb/sdk", () => {
     ]);
   });
 
-  it("reads provider installation events through the response instance", async () => {
+  it("waits on the server's install job through dropped and refused polls", async () => {
     const events = [
-      {
-        type: "started",
-        provider: "codex",
-        command: "npm install --global @openai/codex",
-      },
       {
         type: "completed",
         provider: "codex",
@@ -239,29 +234,66 @@ describe("@bb/sdk", () => {
         success: true,
       },
     ];
-    const response = new Response(null, {
-      status: 200,
-      headers: { "content-type": "application/x-ndjson" },
-    });
-    Object.defineProperty(response, "text", {
-      value: async () =>
-        events.map((event) => JSON.stringify(event)).join("\n"),
-    });
+    const base = {
+      id: "job_1",
+      hostId: "host_test",
+      provider: "codex",
+      actionKind: "update",
+      startedAt: 1,
+    };
+    const replies: Array<() => Response> = [
+      () => jsonResponse({ body: { job: { ...base, state: "running" } }, status: 202 }),
+      () => {
+        throw new TypeError("Load failed");
+      },
+      () => {
+        throw new TypeError("fetch failed", {
+          cause: Object.assign(new Error("connect ECONNREFUSED"), {
+            code: "ECONNREFUSED",
+          }),
+        });
+      },
+      () => jsonResponse({ body: { job: { ...base, state: "running" } } }),
+      () =>
+        jsonResponse({
+          body: {
+            job: { ...base, state: "completed", finishedAt: 2, events },
+          },
+        }),
+    ];
+    const urls: string[] = [];
     const sdk = createBbSdk({
       transport: createHttpTransport({
         baseUrl: "http://bb.test",
-        fetch: async () => response,
+        fetch: async (input, init) => {
+          urls.push(`${init?.method ?? "GET"} ${String(input)}`);
+          const reply = replies.shift();
+          if (reply === undefined) throw new Error("No queued SDK test response");
+          return reply();
+        },
         runtime: "node",
       }),
     });
 
-    await expect(
-      sdk.hosts.installProviderCli({
+    vi.useFakeTimers();
+    try {
+      const install = sdk.hosts.installProviderCli({
         hostId: "host_test",
         provider: "codex",
-        actionKind: "install",
-      }),
-    ).resolves.toEqual(events);
+        actionKind: "update",
+      });
+      await vi.runAllTimersAsync();
+      await expect(install).resolves.toEqual(events);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(urls).toEqual([
+      "POST http://bb.test/api/v1/hosts/host_test/provider-clis/install-jobs",
+      "GET http://bb.test/api/v1/hosts/host_test/provider-clis/install-jobs/job_1",
+      "GET http://bb.test/api/v1/hosts/host_test/provider-clis/install-jobs/job_1",
+      "GET http://bb.test/api/v1/hosts/host_test/provider-clis/install-jobs/job_1",
+      "GET http://bb.test/api/v1/hosts/host_test/provider-clis/install-jobs/job_1",
+    ]);
   });
 
   it("sends thread pane presentation actions through the typed transport", async () => {
@@ -336,6 +368,32 @@ describe("@bb/sdk", () => {
       sdk.threads.list({ signal: controller.signal }),
     ).resolves.toEqual([]);
     expect(receivedSignal).toBe(controller.signal);
+  });
+
+  it("sends telemetry as a keepalive request only when asked", async () => {
+    const keepalives: Array<boolean | undefined> = [];
+    const fetch: FetchImplementation = async (_input, init) => {
+      keepalives.push(init?.keepalive);
+      return jsonResponse({ body: { ok: true } });
+    };
+    const sdk = createBbSdk({
+      transport: createHttpTransport({
+        baseUrl: "http://bb.test",
+        fetch,
+        runtime: "node",
+      }),
+    });
+    const event = {
+      name: "onboarding_left",
+      properties: { step: "projects", entry: "first_run" },
+    } as const;
+
+    await sdk.system.experimental_recordTelemetryEvent(event);
+    await sdk.system.experimental_recordTelemetryEvent(event, {
+      keepalive: true,
+    });
+
+    expect(keepalives).toEqual([undefined, true]);
   });
 
   it("forwards thread read action abort signals to fetch", async () => {
@@ -1627,7 +1685,7 @@ describe("@bb/sdk", () => {
     expect(
       queue.requests.map((request) => `${request.method} ${request.url}`),
     ).toEqual([
-      "GET http://bb.test/api/v1/queued-messages?",
+      "GET http://bb.test/api/v1/queued-messages",
       "POST http://bb.test/api/v1/threads/thr_123/queued-messages/qm_1/send",
       "DELETE http://bb.test/api/v1/threads/thr_123/queued-messages/qm_1",
     ]);
@@ -1732,7 +1790,7 @@ describe("@bb/sdk", () => {
       ],
     });
 
-    expect(queue.requests[0].url).toBe("http://bb.test/api/v1/threads/count?");
+    expect(queue.requests[0].url).toBe("http://bb.test/api/v1/threads/count");
     expect(queue.requests[1].url).toBe(
       "http://bb.test/api/v1/threads/count?status=active&hostId=host_a&providerId=codex&projectId=proj_123&parentThreadId=none&groupBy=host",
     );
@@ -1855,6 +1913,7 @@ describe("@bb/sdk", () => {
       catalogEntryId: "notes",
       publisherLabel: "BB Community",
       sourceDisplay: "npm · @bb/notes · tracks compatible",
+      sourceNotice: null,
       updateState: {},
       enabled: true,
       description: "Notes",
@@ -2219,7 +2278,17 @@ describe("@bb/sdk", () => {
         },
       },
       { body: { stars: 27_053 } },
-      { body: { ok: true, filePath: "/skills/useful-skill/SKILL.md" } },
+      {
+        status: 202,
+        body: {
+          job: {
+            id: "job_1",
+            registrySkillId: registrySkill.id,
+            state: "completed",
+            filePath: "/skills/useful-skill/SKILL.md",
+          },
+        },
+      },
     ]);
     const sdk = createBbSdk({
       transport: createHttpTransport({
@@ -2265,7 +2334,7 @@ describe("@bb/sdk", () => {
       },
       {
         method: "POST",
-        url: "http://bb.test/api/v1/skills-registry/install",
+        url: "http://bb.test/api/v1/skills-registry/install-jobs",
         bodyText: JSON.stringify({
           registrySkillId: registrySkill.id,
         }),

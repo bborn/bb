@@ -86,6 +86,7 @@ import {
 import { useSystemConfig } from "@/hooks/queries/system-queries";
 import { useWorkspaceOpenTargets } from "@/hooks/useWorkspaceOpenTargets";
 import { isDesktopBrowserAvailable } from "@/lib/bb-desktop";
+import { showMutationErrorToast } from "@/lib/mutation-errors";
 import {
   FAVICON_COLOR_VALUES,
   getFaviconGlyphHref,
@@ -506,6 +507,11 @@ export function LocalOpenTargetSettingsSection({
     setAccessRequestPending(true);
     try {
       await onRequestAccess();
+    } catch (error) {
+      showMutationErrorToast({
+        error,
+        fallbackMessage: "Failed to connect to bb on this device",
+      });
     } finally {
       setAccessRequestPending(false);
     }
@@ -561,7 +567,7 @@ export function LocalOpenTargetSettingsSection({
             variant="outline"
             size="sm"
             disabled={accessRequestPending || accessDenied}
-            onClick={handleRequestAccess}
+            onClick={() => void handleRequestAccess()}
           >
             {buttonLabel}
           </Button>
@@ -1119,10 +1125,10 @@ const EXPERIMENT_DEFINITIONS: Record<
   ExperimentKey,
   { label: string; description: string }
 > = {
-  applicationLinks: {
-    label: "App links",
+  agentCpuPriority: {
+    label: "Lower agent CPU priority",
     description:
-      "Open links like linear:// or slack:// in their apps on this device. BB asks first unless you choose Always allow. Manage approvals in General → Links → App links.",
+      "Keep bb responsive when agents saturate the CPU. Agent processes, setup and teardown scripts, and the builds and tests they launch run at a lower CPU priority; on macOS the bb server and machine daemon also get app-level scheduling. Terminals keep normal priority. Turning it on or off takes effect after restarting bb, including restarts for updates.",
   },
   compactExpiredCache: {
     label: "Compact before resuming expired sessions",
@@ -1133,11 +1139,6 @@ const EXPERIMENT_DEFINITIONS: Record<
     label: "Clear notifications once a thread is read",
     description:
       "When you read a thread on any device, remove its notifications from your phones and tablets and from open bb windows and tabs. Phones need an app version that supports it.",
-  },
-  narrowPluginCss: {
-    label: "Faster plugin styles",
-    description:
-      "Load each plugin's stylesheet so it only matches that plugin's own UI, which makes style updates cheaper on pages with many plugins. Plugins built with an old portal-scope helper keep the slower stylesheet. Applies after a reload.",
   },
   performanceDiagnostics: {
     label: "Server performance diagnostics",
@@ -1152,17 +1153,12 @@ const EXPERIMENT_DEFINITIONS: Record<
   resumeThreadsAfterRestart: {
     label: "Resume interrupted threads after a restart",
     description:
-      "When an update, crash or restart cuts off a running thread, bb resumes it a few seconds after it comes back instead of leaving it in error. Messages you queued meanwhile send after it.",
+      "When an update, crash or restart cuts off a running thread or stops a background command a thread is waiting on, bb resumes the thread a few seconds after it comes back and tells the agent what was cut off. Messages you queued meanwhile send after it.",
   },
   serverMove: {
     label: "Server move",
     description:
       "Move the bb server to another machine from Settings → Machines, and export or import server data with bb server.",
-  },
-  sidebarMultiSelect: {
-    label: "Select multiple sidebar threads",
-    description:
-      "In the built-in thread list sidebar, Cmd/Ctrl+Shift-click and Shift-click threads to select several, right-click for bulk actions, and drag them together into a section, under a thread, into Pinned, or into a composer as mentions.",
   },
   skipFocusedThreadNotifications: {
     label: "Skip notifications for the thread you're viewing",
@@ -1179,25 +1175,15 @@ const EXPERIMENT_DEFINITIONS: Record<
     description:
       "Add Metadata to the built-in thread list's Organize → Rows menu. When it is checked, plugins can show details such as a thread's pull request on a second line under its title.",
   },
-  timelinePush: {
-    label: "Pushed timeline updates",
-    description:
-      "Send an open thread's timeline changes over the live connection instead of reloading the latest window after each update.",
-  },
-  unreadDividerAtAnswer: {
-    label: "NEW divider before final assistant message",
-    description:
-      "When you open a thread whose turn finished while you were away, place the NEW divider before the turn's final assistant message, or the error that ended it, instead of before its first tool call. The turn's work stays above the divider.",
-  },
   updateWhenIdle: {
     label: "Update when idle",
     description:
-      "While threads are running, the Updates page offers to update bb once they all finish instead of interrupting them, and bb updates app apply --when-idle does the same from the CLI. bb waits again if a thread starts before it restarts.",
+      "Adds a Restart and update bb automatically switch to the Updates page. While it is on, bb checks for updates every hour and restarts into a new version once no thread is running, waiting again if a thread starts before it restarts. Skip this version keeps a version from installing until a newer one appears. bb updates app apply --when-idle waits for threads once from the CLI.",
   },
-  websocketCompression: {
-    label: "Compressed live updates",
+  walCheckpointWorker: {
+    label: "Background database checkpoints",
     description:
-      "Compress large messages on the live connection, such as timeline updates, which cuts their size about 4x for remote access. Applies when the app reconnects.",
+      "Copy recent writes into bb's database files on a background thread instead of during a save, so heavy writing doesn't pause the server. Applies immediately.",
   },
 };
 export function visibleExperimentKeys(
@@ -1351,7 +1337,7 @@ export function SettingsView() {
         disabled={systemConfigQuery.data === undefined}
         generalSettings={generalSettings}
         onGeneralSettingsChange={(next) =>
-          updateGeneralSettingsMutation.mutateAsync(next)
+          updateGeneralSettingsMutation.mutateAsync(next).catch(() => undefined)
         }
       />
     );
@@ -1381,7 +1367,7 @@ export function SettingsView() {
         onAppearanceThemePrefetch={appThemePreview.prefetchThemes}
         onAppearanceThemePreview={appThemePreview.previewTheme}
         onCreatePalette={() =>
-          navigate(getRootComposeRoutePath(), {
+          void navigate(getRootComposeRoutePath(), {
             state: {
               focusPrompt: true,
               initialPrompt: CREATE_CUSTOM_PALETTE_PROMPT,

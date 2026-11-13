@@ -1,5 +1,6 @@
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -35,6 +36,7 @@ import {
   scriptedEchoProcessEnv,
   waitForRuntimeState,
   waitForThreadAgentMessageText,
+  waitForThreadTurnCompleted,
   waitForThreadTurnStarted,
   withBridgeLaunch,
   type ScriptedEchoLaunchScript,
@@ -79,6 +81,13 @@ const CODEX_SCRIPT: ScriptedEchoLaunchScript = {
 };
 
 const MANAGER_BRIDGE_LAUNCH = createScriptedEchoLaunch();
+const SUPERSEDING_BRIDGE_LAUNCH = {
+  ...MANAGER_BRIDGE_LAUNCH,
+  source: {
+    ...MANAGER_BRIDGE_LAUNCH.source,
+    digest: `b${MANAGER_BRIDGE_LAUNCH.source.digest.slice(1)}`,
+  },
+};
 const MANAGER_PROVIDER = {
   bridgeLaunch: MANAGER_BRIDGE_LAUNCH,
   processKey: "fake",
@@ -242,6 +251,26 @@ describe("createAgentRuntime process lifecycle", () => {
     await runtime.shutdown();
   });
 
+  it.runIf(process.platform === "linux")(
+    "ranks provider processes ahead of bb for the out-of-memory killer",
+    async () => {
+      const manager = createProviderProcessManager({
+        onProcessExit: vi.fn(),
+        workspacePath: tmpDir,
+      });
+      onTestFinished(() => manager.shutdown());
+
+      await manager.ensureProvider(MANAGER_PROVIDER);
+      const providerPid =
+        manager.requireProviderProcess(MANAGER_PROVIDER).child.pid;
+
+      const ownScore = Number(readFileSync("/proc/self/oom_score_adj", "utf8"));
+      expect(
+        Number(readFileSync(`/proc/${providerPid}/oom_score_adj`, "utf8")),
+      ).toBe(Math.min(1_000, ownScore + 500));
+    },
+  );
+
   it("retires a threadless bridge process superseded by a new artifact hash", async () => {
     const manager = createProviderProcessManager({
       onProcessExit: vi.fn(),
@@ -261,7 +290,7 @@ describe("createAgentRuntime process lifecycle", () => {
     });
 
     await manager.ensureProvider({
-      bridgeLaunch: MANAGER_BRIDGE_LAUNCH,
+      bridgeLaunch: SUPERSEDING_BRIDGE_LAUNCH,
       processKey: freshKey,
       providerId: "fake",
     });
@@ -497,7 +526,11 @@ describe("createAgentRuntime process lifecycle", () => {
     scriptPath: string;
     startsLog: string;
   }): void {
-    const holder = `require("node:fs").writeFileSync(${JSON.stringify(args.pidFile)}, String(process.pid)); setTimeout(() => {}, 30_000);`;
+    const holder = `const fs = require("node:fs");
+      const pidFile = ${JSON.stringify(args.pidFile)};
+      fs.writeFileSync(pidFile + ".tmp", String(process.pid));
+      fs.renameSync(pidFile + ".tmp", pidFile);
+      setTimeout(() => {}, 30_000);`;
     writeCrashOnceScript({
       scriptPath: args.scriptPath,
       startMarker: `${args.scriptPath}.started`,
@@ -943,6 +976,40 @@ describe("createAgentRuntime process lifecycle", () => {
         options: fullRuntimeOptions,
       });
       expect(initializeCount()).toBe(2);
+    } finally {
+      await runtime.shutdown();
+    }
+  });
+
+  it("starts threads of two skill catalogs at once without retiring either bridge", async () => {
+    const runtime = createAgentRuntime({
+      workspacePath: tmpDir,
+      onEvent: () => {},
+      onToolCall: async () => ({ contentItems: [], success: true }),
+    });
+    const bridgeLaunch = createScriptedEchoLaunch();
+    const stageSkillRoots = (name: string) => {
+      const path = join(tmpDir, `skills-${name}`);
+      mkdirSync(join(path, name), { recursive: true });
+      writeFileSync(join(path, name, "SKILL.md"), `---\nname: ${name}\n---\n`);
+      return [
+        { id: `skills:${name}`, path, skills: [{ name, description: name }] },
+      ];
+    };
+    const start = (threadId: string, skillName: string) =>
+      runtime.startThread({
+        bridgeLaunch,
+        skillRoots: stageSkillRoots(skillName),
+        environmentId: "env-1",
+        threadId,
+        projectId: "p1",
+        providerId: "scripted",
+        options: fullRuntimeOptions,
+      });
+    try {
+      await Promise.all([start("t1", "first"), start("t2", "second")]);
+      expect(runtime.hasThread("t1")).toBe(true);
+      expect(runtime.hasThread("t2")).toBe(true);
     } finally {
       await runtime.shutdown();
     }
@@ -1523,6 +1590,137 @@ describe("createAgentRuntime process lifecycle", () => {
       }),
     );
     await runtime.shutdown();
+  });
+
+  async function startIdleThreadWithOpenBackgroundTask(): Promise<{
+    events: ThreadEvent[];
+    processLog: ReturnType<typeof createScriptedEchoProcessLog>;
+    providerThreadId: string;
+    runtime: ReturnType<typeof createScriptedEchoRuntime>;
+    startedTask: Extract<ThreadEvent, { type: "item/started" }>;
+  }> {
+    const events: ThreadEvent[] = [];
+    const processLog = createScriptedEchoProcessLog();
+    const runtime = createScriptedEchoRuntime({
+      runtime: {
+        workspacePath: tmpDir,
+        env: processLog.env,
+        onEvent: (event) => events.push(event),
+      },
+    });
+    const { providerThreadId } = await runtime.startThread({
+      environmentId: "env-1",
+      threadId: "t1",
+      projectId: "p1",
+      providerId: "fake",
+      options: fullRuntimeOptions,
+    });
+    await runtime.runTurn({
+      clientRequestId: "creq_bgtaskdea2",
+      threadId: "t1",
+      input: [promptTextInput({ text: "bg_task" })],
+      options: fullRuntimeOptions,
+    });
+    await waitForThreadTurnCompleted({ events, threadId: "t1" });
+    const startedTask = events.find(
+      (event): event is Extract<ThreadEvent, { type: "item/started" }> =>
+        event.type === "item/started" && event.item.type === "backgroundTask",
+    );
+    if (!startedTask) {
+      throw new Error("The bg_task turn opened no background task");
+    }
+    expect(runtime.hasOpenBackgroundWork()).toBe(true);
+    return { events, processLog, providerThreadId, runtime, startedTask };
+  }
+
+  function backgroundTaskCompletions(events: ThreadEvent[]): ThreadEvent[] {
+    return events.filter(
+      (event) => event.type === "item/backgroundTask/completed",
+    );
+  }
+
+  it("settles an idle thread's open background task when its provider process dies", async () => {
+    const { events, processLog, providerThreadId, runtime, startedTask } =
+      await startIdleThreadWithOpenBackgroundTask();
+    const [bridgePid] = processLog
+      .read()
+      .filter((line) => line.startsWith("spawn:"))
+      .map((line) => Number(line.slice("spawn:".length)));
+    if (bridgePid === undefined) {
+      throw new Error("The scripted bridge logged no spawn");
+    }
+
+    process.kill(bridgePid, "SIGKILL");
+    await waitForRuntimeState({
+      label: "the dead bridge's background task settled",
+      predicate: () => backgroundTaskCompletions(events).length > 0,
+      timeoutMs: 5_000,
+    });
+
+    expect(backgroundTaskCompletions(events)).toEqual([
+      {
+        type: "item/backgroundTask/completed",
+        threadId: "t1",
+        providerThreadId,
+        scope: { kind: "thread" },
+        item: {
+          ...startedTask.item,
+          ownerStopped: true,
+          status: "interrupted",
+          taskStatus: "stopped",
+        },
+      },
+    ]);
+    expect(runtime.hasOpenBackgroundWork()).toBe(false);
+    await runtime.shutdown();
+    expect(backgroundTaskCompletions(events)).toHaveLength(1);
+  });
+
+  it("settles open background tasks when the runtime shuts down", async () => {
+    const { events, providerThreadId, runtime, startedTask } =
+      await startIdleThreadWithOpenBackgroundTask();
+
+    await runtime.shutdown();
+
+    expect(backgroundTaskCompletions(events)).toEqual([
+      {
+        type: "item/backgroundTask/completed",
+        threadId: "t1",
+        providerThreadId,
+        scope: { kind: "thread" },
+        item: {
+          ...startedTask.item,
+          ownerStopped: true,
+          status: "interrupted",
+          taskStatus: "stopped",
+        },
+      },
+    ]);
+  });
+
+  it("does not settle a background task its provider already settled", async () => {
+    const { events, runtime } = await startIdleThreadWithOpenBackgroundTask();
+    await runtime.runTurn({
+      clientRequestId: "creq_bgtaskdeb3",
+      threadId: "t1",
+      input: [promptTextInput({ text: "bg_task_done" })],
+      options: fullRuntimeOptions,
+    });
+    await waitForRuntimeState({
+      label: "the provider settled its background task",
+      predicate: () => !runtime.hasOpenBackgroundWork(),
+      timeoutMs: 5_000,
+    });
+
+    await runtime.shutdown();
+
+    expect(
+      backgroundTaskCompletions(events).map((event) =>
+        event.type === "item/backgroundTask/completed"
+          ? event.item.taskStatus
+          : null,
+      ),
+    ).toEqual(["completed"]);
   });
 
   it("concurrent ensureProvider calls do not spawn duplicate processes", async () => {

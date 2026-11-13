@@ -1,9 +1,7 @@
 import { env as workerEnv } from "cloudflare:workers";
 
 export interface Env {
-  DB: D1Database;
-  HYPERDRIVE?: Hyperdrive;
-  CONNECT_DB_FLAGS?: KVNamespace;
+  HYPERDRIVE: Hyperdrive;
   TUNNEL_DO: DurableObjectNamespace;
   LINK_START_RATE_LIMITER: RateLimit;
   BASE_DOMAIN: string;
@@ -14,6 +12,7 @@ export interface Env {
   GITHUB_CLIENT_SECRET: string;
   BETTER_AUTH_SECRET: string;
   LANDING_POSTHOG_KEY?: string;
+  POSTHOG_FLAGS_SECRET_KEY?: string;
   RESEND_API_KEY?: string;
   RESEND_AUDIENCE_ID?: string;
   MARKETPLACE?: R2Bucket;

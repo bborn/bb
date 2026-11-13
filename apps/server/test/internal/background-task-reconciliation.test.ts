@@ -277,7 +277,10 @@ describe("settleDanglingBackgroundTasks", () => {
         }),
       });
 
-      settleDanglingBackgroundTasks(harness.deps, { hostId: host.id });
+      settleDanglingBackgroundTasks(harness.deps, {
+        hostId: host.id,
+        reason: "host-daemon-restarted",
+      });
 
       const rows = listEvents(harness.deps.db, { threadId: thread.id });
       const completed = rows.filter(
@@ -285,13 +288,22 @@ describe("settleDanglingBackgroundTasks", () => {
       );
       expect(completed).toHaveLength(1);
       const data = JSON.parse(completed[0]!.data) as {
-        item: { status: string; taskStatus: string; workflowName: string };
+        item: {
+          ownerStopped?: true;
+          status: string;
+          taskStatus: string;
+          workflowName: string;
+        };
       };
       expect(data.item.status).toBe("interrupted");
       expect(data.item.taskStatus).toBe("stopped");
+      expect(data.item.ownerStopped).toBe(true);
       expect(data.item.workflowName).toBe("fixture-mini");
 
-      settleDanglingBackgroundTasks(harness.deps, { hostId: host.id });
+      settleDanglingBackgroundTasks(harness.deps, {
+        hostId: host.id,
+        reason: "host-daemon-restarted",
+      });
       expect(
         listEvents(harness.deps.db, { threadId: thread.id }).filter(
           (row) => row.type === "item/backgroundTask/completed",
@@ -353,8 +365,14 @@ describe("settleDanglingBackgroundTasks", () => {
         }),
       });
 
-      settleDanglingBackgroundTasks(harness.deps, { hostId: otherHost.id });
-      settleDanglingBackgroundTasks(harness.deps, { hostId: host.id });
+      settleDanglingBackgroundTasks(harness.deps, {
+        hostId: otherHost.id,
+        reason: "host-daemon-restarted",
+      });
+      settleDanglingBackgroundTasks(harness.deps, {
+        hostId: host.id,
+        reason: "host-daemon-restarted",
+      });
 
       const completed = listEvents(harness.deps.db, {
         threadId: thread.id,
@@ -367,6 +385,49 @@ describe("settleDanglingBackgroundTasks", () => {
     });
   });
 
+  it("settles a task stored before items carried the foreground flag", async () => {
+    await withTestHarness(async (harness) => {
+      const { environment, host, thread } = seedThreadFixture(harness, {});
+      const data = backgroundTaskItemData({
+        itemId: "task:legacy",
+        status: "pending",
+        taskStatus: "running",
+      });
+      const { foreground: _foreground, ...legacyItem } = data.item as Record<
+        string,
+        unknown
+      >;
+      seedStoredEvent(harness.deps, {
+        threadId: thread.id,
+        environmentId: environment.id,
+        sequence: 1,
+        type: "item/started",
+        scope: turnScope("turn-1"),
+        providerThreadId: "claude-session-1",
+        itemId: "task:legacy",
+        itemKind: "backgroundTask",
+        data: { ...data, item: legacyItem },
+      });
+
+      settleDanglingBackgroundTasks(harness.deps, {
+        hostId: host.id,
+        reason: "host-daemon-restarted",
+      });
+
+      const completed = listEvents(harness.deps.db, {
+        threadId: thread.id,
+      }).filter((row) => row.type === "item/backgroundTask/completed");
+      expect(completed).toHaveLength(1);
+      expect(JSON.parse(completed[0]!.data)).toMatchObject({
+        item: {
+          status: "interrupted",
+          taskStatus: "stopped",
+          foreground: false,
+        },
+      });
+    });
+  });
+
   it("preserves an already-finished task status instead of stomping it to interrupted", async () => {
     await withTestHarness(async (harness) => {
       const { host, thread } = seedOpenBackgroundTaskThread(harness, {
@@ -374,7 +435,10 @@ describe("settleDanglingBackgroundTasks", () => {
         taskStatus: "completed",
       });
 
-      settleDanglingBackgroundTasks(harness.deps, { hostId: host.id });
+      settleDanglingBackgroundTasks(harness.deps, {
+        hostId: host.id,
+        reason: "host-daemon-restarted",
+      });
 
       expect(listSettledBackgroundTaskItems(harness, thread.id)).toEqual([
         { status: "completed", taskStatus: "completed" },
@@ -579,6 +643,7 @@ describe("background-task lifecycle reconciliation triggers", () => {
         {
           type: "provider-session-policy.replace",
           idleProviderSessionTimeoutMinutes: 30,
+          agentCpuPriority: false,
         },
         {
           type: "machine-environment.replace",
@@ -626,6 +691,7 @@ describe("background-task lifecycle reconciliation triggers", () => {
         {
           type: "provider-session-policy.replace",
           idleProviderSessionTimeoutMinutes: 30,
+          agentCpuPriority: false,
         },
         {
           type: "machine-environment.replace",

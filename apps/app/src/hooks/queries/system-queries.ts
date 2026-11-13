@@ -1,4 +1,9 @@
-import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  queryOptions,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import type {
   PermissionMode,
@@ -12,6 +17,7 @@ import type {
   SystemCliSkillsStatusResponse,
   SystemExecutionOptionsResponse,
   SystemProvidersQuery,
+  SystemProviderState,
   SystemProviderStatesResponse,
   SystemVersionResponse,
 } from "@bb/server-contract";
@@ -37,6 +43,7 @@ import {
   allSystemProvidersQueryKeyPrefix,
   hostProviderCliStatusQueryKey,
   systemCliCommandQueryKey,
+  systemSetupGuideQueryKey,
   systemCliSkillsQueryKey,
   systemAiServicesQueryKey,
   systemConfigQueryKey,
@@ -44,11 +51,13 @@ import {
   systemProvidersQueryKey,
   systemProviderCatalogQueryKey,
   systemProviderStatesQueryKey,
+  hostProviderStateQueryKey,
   systemThemeQueryKey,
   systemVersionQueryKey,
   uiPreferencesQueryKey,
 } from "./query-keys";
 import { requireEnabledQueryArg, type QueryOptions } from "./query-helpers";
+import { fetchSetupGuideAssignment } from "./setup-guide-requests";
 import {
   SERVER_SESSION_QUERY_POLICY,
   SESSION_STATIC_QUERY_POLICY,
@@ -586,6 +595,16 @@ export function useCliSkillsStatus(options?: QueryOptions) {
   });
 }
 
+export function useSetupGuideAssignment(options?: QueryOptions) {
+  return useQuery({
+    queryKey: systemSetupGuideQueryKey(),
+    queryFn: ({ signal }) => fetchSetupGuideAssignment(signal),
+    enabled: options?.enabled ?? true,
+    staleTime: Infinity,
+    retry: false,
+  });
+}
+
 export function useCliCommandStatus(options?: QueryOptions) {
   return useQuery<SystemCliCommandStatus>({
     queryKey: systemCliCommandQueryKey(),
@@ -657,6 +676,45 @@ export function useSystemProviderStates(
   options: UseSystemProviderStatesOptions = {},
 ) {
   return useQuery(systemProviderStatesQueryOptions(options));
+}
+
+export function useHostProviderStatesAsTheyLoad(args: {
+  hostId: string | null;
+  providerIds: readonly string[];
+  enabled: boolean;
+}): { providerId: string; state: SystemProviderState | null | undefined }[] {
+  const { hostId } = args;
+  return useQueries({
+    queries: args.providerIds.map((providerId) => ({
+      queryKey: hostProviderStateQueryKey({
+        hostId: hostId ?? "",
+        providerId,
+      }),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        sdk.system.providerStates({
+          hostId: requireEnabledQueryArg({
+            value: hostId,
+            hookName: "useHostProviderStatesAsTheyLoad",
+            argName: "hostId",
+          }),
+          providerId,
+          signal,
+        }),
+      enabled: args.enabled && hostId !== null,
+      staleTime: Infinity,
+      retry: false,
+    })),
+    combine: (results) =>
+      results.map((result, index) => ({
+        providerId: args.providerIds[index] ?? "",
+        state:
+          result.data !== undefined
+            ? (result.data.providers[0] ?? null)
+            : result.isError
+              ? null
+              : undefined,
+      })),
+  });
 }
 
 export function useSystemProviderCatalog() {

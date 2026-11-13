@@ -80,7 +80,9 @@ export async function handleHostSessionOpened(
     {
       sessionId: args.openedSession.id,
       hostId: args.hostId,
+      instanceId: args.openedSession.instanceId,
       replacedSessionId: args.previousSession?.id ?? null,
+      replacedInstanceId: args.previousSession?.instanceId ?? null,
     },
     "Session opened",
   );
@@ -115,8 +117,9 @@ export async function handleHostSessionOpened(
   }
 
   if (replacedSession && !sameDaemonInstance) {
-    const resumingThreadIds = planRestartResumes(deps, {
+    const continuations = planRestartResumes(deps, {
       hostId: args.hostId,
+      ownerStoppedSinceMs: replacedSession.createdAt,
     });
     interruptEnvironmentProvisioningForHost(deps, {
       hostId: args.hostId,
@@ -130,12 +133,15 @@ export async function handleHostSessionOpened(
       includeStopping: false,
       hostId: args.hostId,
       reason: "host-daemon-restarted",
-      resumingThreadIds,
+      resumingThreadIds: new Set(continuations.keys()),
     });
-    settleDanglingBackgroundTasks(deps, { hostId: args.hostId });
+    settleDanglingBackgroundTasks(deps, {
+      hostId: args.hostId,
+      reason: "host-daemon-restarted",
+    });
     await queueRestartResumes(deps, {
+      continuations,
       interrupted: interrupted.threads,
-      resumingThreadIds,
     });
   }
 
@@ -271,7 +277,10 @@ export function settleRemovedHostWork(
     reason: "host-removed",
     resumingThreadIds: new Set(),
   });
-  settleDanglingBackgroundTasks(deps, { hostId: args.hostId });
+  settleDanglingBackgroundTasks(deps, {
+    hostId: args.hostId,
+    reason: "host-removed",
+  });
   notifyHostThreadRuntimeStatusChanged(deps, args.hostId);
 }
 
@@ -309,7 +318,10 @@ function settleLostHostWork(
     hostId: args.hostId,
     reason: DAEMON_DISCONNECTED_PENDING_INTERACTION_REASON,
   });
-  settleDanglingBackgroundTasks(deps, { hostId: args.hostId });
+  settleDanglingBackgroundTasks(deps, {
+    hostId: args.hostId,
+    reason: "host-connection-lost",
+  });
   notifyHostThreadRuntimeStatusChanged(deps, args.hostId);
   interruptActiveThreadsForHost(deps, {
     includeStopping: false,

@@ -263,7 +263,9 @@ export class DemoWorld {
         case "/system/app-update":
           return json({
             activity: { phase: "idle" },
+            autoUpdate: false,
             available: null,
+            availableSkipped: false,
             blocked: null,
             current: { commit: null, version: SYSTEM_VERSION.currentVersion },
             lastResult: null,
@@ -552,7 +554,7 @@ export class DemoWorld {
       activeWorkflows: [],
       activeBackgroundCommands: [],
       pendingTodos: null,
-      goal: null,
+      extensionStates: {},
       providerCommands: null,
       sessionOptions: null,
       modelFallback: null,
