@@ -26,9 +26,12 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import {
+  formatUsagePace,
   formatUsageReset,
   formatUsdCents,
   usageBarColorClass,
+  usagePace,
+  usageWindowMinutes,
 } from "./usage-format.js";
 import { LIST_HOVER_TRANSITION } from "@/components/ui/motion";
 import {
@@ -271,6 +274,14 @@ function UsageWindow({ window }: { window: UsageWindowValue }) {
   const [showReset, setShowReset] = useState(false);
   const reset = formatUsageReset(window.resetsAt);
   const countdown = formatResetCountdown(window.resetsAt);
+  const pace =
+    window.cost === null
+      ? usagePace(
+          window.usedPercent,
+          window.resetsAt,
+          usageWindowMinutes(window.label),
+        )
+      : null;
   const value =
     window.cost === null
       ? Math.round(window.usedPercent) + "% used"
@@ -290,7 +301,7 @@ function UsageWindow({ window }: { window: UsageWindowValue }) {
         <span className="max-w-20 truncate text-subtle-foreground">
           {shortWindowLabel(window.label)}
         </span>
-        <span className="h-1 min-w-0 overflow-hidden rounded-full bg-sidebar-border">
+        <span className="relative h-1 min-w-0 overflow-hidden rounded-full bg-sidebar-border">
           <span
             className={
               "block h-full rounded-full " +
@@ -300,6 +311,14 @@ function UsageWindow({ window }: { window: UsageWindowValue }) {
               width: Math.max(2, Math.min(100, window.usedPercent)) + "%",
             }}
           />
+          {pace === null ? null : (
+            <span
+              aria-hidden="true"
+              data-testid="usage-pace-marker"
+              className="absolute inset-y-0 w-px bg-sidebar-foreground/70"
+              style={{ left: Math.min(100, pace.expectedPercent) + "%" }}
+            />
+          )}
         </span>
         <span
           className={cn(
@@ -316,6 +335,16 @@ function UsageWindow({ window }: { window: UsageWindowValue }) {
           {countdown ?? "—"}
         </span>
       </span>
+      {pace === null ? null : (
+        <span
+          className={cn(
+            "col-span-full pb-1 text-2xs",
+            pace.lastsUntilReset ? "text-subtle-foreground" : "text-destructive",
+          )}
+        >
+          {formatUsagePace(pace)}
+        </span>
+      )}
       {showReset ? (
         <span className="col-span-full pb-1 text-2xs text-subtle-foreground">
           {reset ?? "Reset time not reported."}
