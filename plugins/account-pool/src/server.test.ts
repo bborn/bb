@@ -478,6 +478,7 @@ describe("Account Pool config schema", () => {
       codexUpstreamBaseUrl: "https://chatgpt.com/backend-api/codex",
       switchThreshold: 0.98,
       parentMode: "proxy",
+      failback: false,
     });
     expect(
       accountPoolConfigSetInputSchema.safeParse({
@@ -578,6 +579,7 @@ describe("Account Pool plugin", () => {
       codexUpstreamBaseUrl: "https://chatgpt.com/backend-api/codex",
       switchThreshold: 0.75,
       parentMode: "proxy",
+      failback: false,
     });
     expect(
       accountPoolConfigSchema.parse(await host.bb.storage.kv.get("config")),
@@ -1917,7 +1919,10 @@ describe("Account Pool plugin", () => {
   });
 
   it("lists Claude models through the hub with a pooled account's credentials", async () => {
-    const seen: Array<{ url: string | undefined; authorization: string | undefined }> = [];
+    const seen: Array<{
+      url: string | undefined;
+      authorization: string | undefined;
+    }> = [];
     const upstream = await startUpstream(async (request, response) => {
       await readRequestBody(request);
       seen.push({
@@ -3988,9 +3993,7 @@ describe("Account Pool plugin", () => {
     const upstreamKey = (init: RequestInit | undefined) => {
       const headers = new Headers(init?.headers);
       return (
-        headers.get("x-api-key") ??
-        headers.get("authorization")?.slice(7) ??
-        ""
+        headers.get("x-api-key") ?? headers.get("authorization")?.slice(7) ?? ""
       );
     };
 
@@ -4217,6 +4220,56 @@ describe("Account Pool plugin", () => {
           await response.text();
         }
         expect(attempts).toEqual(["sk-first", "sk-second", "sk-second"]);
+      },
+    );
+
+    it.each([
+      { failback: true, fresh: "sk-first" },
+      { failback: false, fresh: "sk-second" },
+    ])(
+      "routes new Claude conversations to $fresh after the first account recovers with failback=$failback",
+      async ({ failback, fresh }) => {
+        let outage = false;
+        const attempts: string[] = [];
+        const upstreamFetch: typeof fetch = async (_input, init) => {
+          const key = upstreamKey(init);
+          attempts.push(key);
+          return Response.json(
+            {},
+            { status: outage && key === "sk-first" ? 503 : 200 },
+          );
+        };
+        const fixture = await affinityFixture("claude", upstreamFetch);
+        await fixture.host.harness.behavior.callRpc("config.set", { failback });
+        const send = async (id: string) => {
+          const response = await fixture.host.harness.behavior.fetchHttp(
+            "POST",
+            "/v1/messages",
+            {
+              headers: { ...authHeaders(fixture.key), "session-id": id },
+              body: claudeBody(id),
+            },
+          );
+          expect(response.status).toBe(200);
+          await response.text();
+        };
+        await send("original");
+        outage = true;
+        await send("fallback");
+        outage = false;
+        await send("fresh");
+        await send("fallback");
+        await send("another-fresh");
+        await send("original");
+        expect(attempts).toEqual([
+          "sk-first",
+          "sk-first",
+          "sk-second",
+          fresh,
+          "sk-second",
+          fresh,
+          "sk-first",
+        ]);
       },
     );
 
@@ -5340,10 +5393,10 @@ describe("Account Pool plugin", () => {
               : reason === "network error"
                 ? ["sk-first", "sk-first", "sk-first", "sk-first"]
                 : [
-                  "sk-first",
-                  "sk-second",
-                  reason === "family quota" ? "sk-first" : "sk-second",
-                ],
+                    "sk-first",
+                    "sk-second",
+                    reason === "family quota" ? "sk-first" : "sk-second",
+                  ],
           );
         } finally {
           finishOld();
@@ -6459,7 +6512,10 @@ describe("sequential pool recovery", () => {
         fetch: async (_input, init) => {
           attempts.push(new Headers(init?.headers).get("x-api-key"));
           return outage
-            ? Response.json({}, { status: 503, headers: { "retry-after": "0" } })
+            ? Response.json(
+                {},
+                { status: 503, headers: { "retry-after": "0" } },
+              )
             : Response.json({});
         },
       },

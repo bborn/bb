@@ -36,7 +36,7 @@ import type { ClaudeOAuthLogin } from "./oauth-login.js";
 import type { CodexDeviceLogin } from "./codex-device-login.js";
 
 const DESCRIPTION = [
-  "Accounts run sequentially by priority, then order added. The current fallback stays active until unavailable.",
+  "Accounts run sequentially by priority, then order added. The current fallback stays active until unavailable, unless failback is on: then new conversations return to the highest-priority account below switchThreshold.",
   "switchThreshold is a preference, not a cutoff: new conversations go to accounts below it first, existing conversations keep their account past it, and accounts at or above it keep serving until the provider refuses them. Status shows exhausted only for an account the provider refused.",
   "When this bb server runs inside another bb server's thread, parent proxy routes its pooled traffic through that parent; isolate neutralises the inherited routing.",
   "Reorder includes every account for the provider and changes the next failover sequence; existing conversations stay pinned.",
@@ -182,6 +182,7 @@ function formatConfig(config: AccountPoolConfig): string {
     `codexUpstreamBaseUrl: ${config.codexUpstreamBaseUrl}`,
     `switchThreshold: ${config.switchThreshold}`,
     `parentMode: ${config.parentMode}`,
+    `failback: ${config.failback}`,
   ].join("\n");
 }
 
@@ -219,8 +220,18 @@ function parseConfigUpdate(
   if (key === "parentMode") {
     return accountPoolConfigSetInputSchema.parse({ parentMode: value });
   }
+  if (key === "failback") {
+    if (value !== "true" && value !== "false") {
+      throw new PluginCliError("failback must be true or false.", {
+        code: "invalid_value",
+      });
+    }
+    return accountPoolConfigSetInputSchema.parse({
+      failback: value === "true",
+    });
+  }
   throw new PluginCliError(
-    "Config key must be anthropicUpstreamBaseUrl, codexUpstreamBaseUrl, switchThreshold, or parentMode.",
+    "Config key must be anthropicUpstreamBaseUrl, codexUpstreamBaseUrl, switchThreshold, parentMode, or failback.",
     { code: "invalid_value" },
   );
 }
@@ -756,13 +767,13 @@ export function registerPoolCli(
             {
               name: "key",
               description:
-                "anthropicUpstreamBaseUrl, codexUpstreamBaseUrl, switchThreshold, or parentMode",
+                "anthropicUpstreamBaseUrl, codexUpstreamBaseUrl, switchThreshold, parentMode, or failback",
               required: true,
             },
             {
               name: "value",
               description:
-                "HTTP(S) URL for the upstream keys, a number above 0 and at most 1 for switchThreshold (the quota fraction from which other accounts are preferred), proxy or isolate for parentMode",
+                "HTTP(S) URL for the upstream keys, a number above 0 and at most 1 for switchThreshold (the quota fraction from which other accounts are preferred), proxy or isolate for parentMode, true or false for failback (return new conversations to the highest-priority account once it is below switchThreshold)",
               required: true,
             },
           ],

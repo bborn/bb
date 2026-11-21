@@ -123,6 +123,7 @@ function config(overrides: Partial<AccountPoolConfig> = {}): AccountPoolConfig {
     codexUpstreamBaseUrl: "https://chatgpt.com/backend-api/codex",
     switchThreshold: 0.98,
     parentMode: "proxy",
+    failback: false,
     ...overrides,
   };
 }
@@ -230,7 +231,9 @@ describe("Account Pool settings", () => {
   it("renders cached accounts as refreshing until live status arrives, then caches it", async () => {
     window.localStorage.setItem(
       STATUS_CACHE_KEY,
-      JSON.stringify(status([account({ limitWindows: [claudeWindow("primary", 0.21)] })])),
+      JSON.stringify(
+        status([account({ limitWindows: [claudeWindow("primary", 0.21)] })]),
+      ),
     );
     const live = deferred<PoolStatus>();
     const slot = render([], { "status.get": () => live.promise });
@@ -240,7 +243,9 @@ describe("Account Pool settings", () => {
     expect(slot.getByText(/· refreshing…$/)).toBeTruthy();
     expect(slot.queryByText("Loading…")).toBeNull();
     expect(slot.queryByText("No accounts in the pool")).toBeNull();
-    live.resolve(status([account({ limitWindows: [claudeWindow("primary", 0.6)] })]));
+    live.resolve(
+      status([account({ limitWindows: [claudeWindow("primary", 0.6)] })]),
+    );
     expect(await slot.findByText("60%")).toBeTruthy();
     expect(slot.queryByText("refreshing usage…")).toBeNull();
     expect(slot.queryByText(/· refreshing…$/)).toBeNull();

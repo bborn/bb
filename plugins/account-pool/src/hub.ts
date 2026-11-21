@@ -959,6 +959,18 @@ export class AccountPoolHub {
     const activeAccount = eligible.find(
       ({ account }) => account.id === active?.accountId,
     );
+    const preferred =
+      this.options.getSettings().failback && eligible === included
+        ? candidates[0]
+        : undefined;
+    const failingBack =
+      preferred !== undefined &&
+      boundAccountId === null &&
+      previousAccountId === null &&
+      inherited === undefined &&
+      (activeAccount === undefined ||
+        accounts.indexOf(preferred.account) <
+          accounts.indexOf(activeAccount.account));
     const anchorId = previousAccountId ?? boundAccountId ?? active?.accountId;
     const anchorIndex = accounts.findIndex(
       (account) => account.id === anchorId,
@@ -976,6 +988,7 @@ export class AccountPoolHub {
       bound !== undefined && isUnattempted(bound)
         ? bound
         : (inherited ??
+          (failingBack ? preferred : undefined) ??
           (boundAccountId === null &&
           previousAccountId === null &&
           activeAccount !== undefined &&
@@ -1025,7 +1038,8 @@ export class AccountPoolHub {
         (binding === routing.binding && attempted.has(bound.account.id)));
     const advance =
       !familyDetour(active.accountId) &&
-      (activeAccount === undefined ||
+      (failingBack ||
+        activeAccount === undefined ||
         active.accountId === selected.account.id ||
         (active === routing.active && attempted.has(active.accountId)));
     return {

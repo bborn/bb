@@ -92,7 +92,7 @@ type DialogState =
 
 const NEW_LOGIN: LoginTarget = { kind: "add", label: null, priority: 100 };
 
-type ConfigField = Exclude<keyof AccountPoolConfig, "parentMode">;
+type ConfigField = Exclude<keyof AccountPoolConfig, "parentMode" | "failback">;
 
 const CONFIG_FIELDS: readonly ConfigField[] = [
   "anthropicUpstreamBaseUrl",
